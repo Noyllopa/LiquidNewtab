@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>New Tab</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* 预加载背景图片，加载完成后渐变显示 */
+        .preloaded-bg {
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            opacity: 0; /* 初始隐藏 */
+            transition: opacity 0s ease; /* 移除过渡效果 */
+        }
+        
+        /* 浏览器浅色模式下，默认使用深色文字 */
+        @media (prefers-color-scheme: light) {
+            .search-capsule input,
+            .engine-label,
+            .engine-option span,
+            .shortcut-item span {
+                color: #333 !important;
+            }
+            
+            .search-capsule input::placeholder {
+                color: rgba(0, 0, 0, 0.5) !important;
+            }
+            
+            .divider {
+                background: rgba(0,0,0,0.2) !important;
+            }
+            
+            .search-capsule button,
+            .settings-btn,
+            .add-btn {
+                color: #333 !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="blobs-container" id="blobs-layer">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+        <div class="blob blob-3"></div>
+    </div>
+    
+    <svg style="position: absolute; width: 0; height: 0;" xmlns="http://www.w3.org/2000/svg">
+        <filter id="frosted" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="20" />
+        </filter>
+    </svg>
+
+    <div class="settings-btn glass-element icon-hover" id="settings-trigger">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
+        </svg>
+    </div>
+
+    <div class="main-layout">
+        <div class="search-wrapper">
+            <div class="search-capsule glass-element">
+                <div class="engine-selector" id="engine-selector">
+                    <span class="engine-label" id="engine-label">Google</span>
+                </div>
+                <div class="divider"></div>
+                <input type="text" id="search-input" placeholder="" autocomplete="off">
+                <button id="search-btn" class="icon-hover">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                </button>
+            </div>
+
+            <!-- 搜索引擎选择下拉菜单 -->
+            <div id="engine-dropdown" class="engine-dropdown hidden">
+            </div>
+        </div>
+
+        <div class="grid-container" id="shortcuts-grid">
+            </div>
+
+        <div class="add-btn glass-element icon-hover" id="add-shortcut-btn">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </div>
+    </div>
+
+    <dialog id="edit-dialog" class="glass-dialog">
+        <h3 class="dialog-title">编辑快捷方式</h3>
+        <input type="text" id="shortcut-name" placeholder="名称" class="glass-input">
+        <input type="text" id="shortcut-url" placeholder="网址" class="glass-input">
+        <div class="icon-input-container">
+            <input type="text" id="shortcut-icon" placeholder="图标 URL (可选)" class="glass-input">
+            <label for="shortcut-icon-upload" class="glass-btn">上传图标</label>
+            <input type="file" id="shortcut-icon-upload" accept="image/*" hidden>
+        </div>
+        <div class="dialog-actions">
+            <button id="cancel-btn" class="glass-btn">取消</button>
+            <button id="save-btn" class="glass-btn primary">保存</button>
+        </div>
+    </dialog>
+    
+    <dialog id="engine-dialog" class="glass-dialog">
+        <h3 class="dialog-title">添加搜索引擎</h3>
+        <input type="text" id="engine-name" placeholder="名称" class="glass-input">
+        <input type="text" id="engine-url" placeholder="URL (使用 %s 作为占位符)" class="glass-input">
+        <div class="dialog-actions">
+            <button id="engine-cancel-btn" class="glass-btn">取消</button>
+            <button id="engine-save-btn" class="glass-btn primary">保存</button>
+        </div>
+    </dialog>
+
+    <dialog id="settings-dialog" class="glass-dialog settings-modal">
+        <h3 class="dialog-title">设置</h3>
+        
+        <div class="settings-content">
+            <div class="settings-section layout-settings">
+                <h4>布局</h4>
+                <div class="setting-group">
+                    <label class="setting-label">
+                        <span class="setting-name">列数 <span class="setting-value" id="col-val">5</span></span>
+                        <input type="range" class="setting-slider" id="setting-cols" min="3" max="10" step="1" value="5">
+                    </label>
+                </div>
+                <div class="setting-group">
+                    <label class="setting-label">
+                        <span class="setting-name">图标大小</span>
+                        <input type="range" class="setting-slider" id="setting-size" min="80" max="160" step="10" value="100">
+                    </label>
+                </div>
+                <div class="setting-group">
+                    <label class="setting-label">
+                        <span class="setting-name">显示比例 <span class="setting-value" id="scale-val">100%</span></span>
+                        <input type="range" class="setting-slider" id="setting-scale" min="50" max="200" step="5" value="100">
+                    </label>
+                </div>
+            </div>
+            
+            <div class="settings-section">
+                <h4>颜色模式</h4>
+                <div class="color-mode-buttons">
+                    <button class="glass-btn active" data-mode="auto">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="2" y1="12" x2="22" y2="12"></line>
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                        </svg>
+                        <span>自动</span>
+                    </button>
+                    <button class="glass-btn" data-mode="light">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                        <span>浅色</span>
+                    </button>
+                    <button class="glass-btn" data-mode="dark">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                        </svg>
+                        <span>深色</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h4>背景</h4>
+                <div class="settings-buttons bg-options">
+                    <button id="bg-unsplash-btn" class="settings-button glass-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7.5 6.75V0h9v6.75h-9zm9 3.75H24V24H0V10.5h7.5v6.75h9V10.5z"/></svg>
+                        <span>随机 Unsplash</span>
+                    </button>
+                    <label for="bg-upload-input" class="settings-button glass-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        <span>上传图片</span>
+                        <input type="file" id="bg-upload-input" accept="image/*" hidden>
+                    </label>
+                </div>
+                <button id="bg-reset-btn" class="glass-btn full-width danger">恢复默认背景</button>
+            </div>
+
+            <div class="settings-section">
+                <h4>搜索引擎</h4>
+                <div class="engine-list-container">
+                    <div id="engine-list" class="engine-list"></div>
+                    <button id="add-engine-btn" class="glass-btn full-width">添加搜索引擎</button>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h4>数据管理</h4>
+                <div class="settings-buttons data-management">
+                    <button id="export-data-btn" class="settings-button glass-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        <span>导出数据</span>
+                    </button>
+                    <label for="import-data-input" class="settings-button glass-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <span>导入数据</span>
+                        <input type="file" id="import-data-input" accept=".json" hidden>
+                    </label>
+                </div>
+            </div>
+
+            <div class="dialog-actions">
+                <button id="settings-close" class="glass-btn">关闭</button>
+            </div>
+        </div>
+    </dialog>
+
+    <div id="context-menu" class="context-menu glass-element hidden">
+        <div class="menu-item" id="menu-edit">编辑</div>
+        <div class="menu-item delete" id="menu-delete">删除</div>
+    </div>
+
+
+
+    <script src="script.js"></script>
+</body>
+</html>
