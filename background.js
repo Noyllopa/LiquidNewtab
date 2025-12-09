@@ -2,31 +2,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Received message:', request);
 
   if (request.action === "fetchFavicon") {
-    const xhr = new XMLHttpRequest();
-    xhr.open('GET', request.url, true);
-    xhr.responseType = 'blob';
-
-    xhr.onload = function() {
-      if (xhr.status === 200) {
+    fetch(request.url)
+      .then(res => res.blob())
+      .then(blob => {
         const reader = new FileReader();
-        reader.onload = function() {
+        reader.onloadend = () => {
           sendResponse({ success: true, dataUrl: reader.result });
         };
-        reader.onerror = function() {
-          sendResponse({ success: false, error: "Failed to read blob data" });
-        };
-        reader.readAsDataURL(xhr.response);
-      } else {
-        sendResponse({ success: false, error: `HTTP error! status: ${xhr.status}` });
-      }
-    };
-
-    xhr.onerror = function() {
-      sendResponse({ success: false, error: "Network error occurred" });
-    };
-
-    xhr.send();
-    return true; // 异步响应
+        reader.readAsDataURL(blob);
+      })
+      .catch(err => {
+        sendResponse({ success: false, error: err.message });
+      });
+    return true; // 关键：保持异步响应
   }
 
   if (request.action === "performSearch") {
