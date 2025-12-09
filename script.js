@@ -630,22 +630,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 使用自定义图标或获取网站favicon
             let faviconUrl = item.icon;
             if (!faviconUrl) {
-                // 尝试从本地存储获取favicon
-                const hostname = new URL(getFullUrl(item.url)).hostname;
+                const hostname = getStandardHostname(item.url);
                 const savedFavicon = await Storage.get(`favicon_${hostname}`);
-                if (savedFavicon) {
+                if (savedFavicon && savedFavicon.length > 0) {
                     faviconUrl = savedFavicon;
+                } else if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
+                    // 仅当没有缓存时才获取新的favicon
+                    getFaviconAndCache(item.url, div);
+                    faviconUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`;
                 } else {
-                    // 只有在支持background script的情况下才尝试获取favicon
-                    if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
-                        // 异步获取favicon并缓存
-                        getFaviconAndCache(item.url, div);
-                        // 使用Google服务作为临时图标直到获取完成
-                        faviconUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`;
-                    } else {
-                        // 如果不支持background script，直接使用Google服务图标
-                        faviconUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`;
-                    }
+                    faviconUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`;
                 }
             }
             
@@ -666,14 +660,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         return url;
     }
     
+    // 标准化hostname以提高缓存命中率
+    function getStandardHostname(url) {
+        try {
+            const hostname = new URL(getFullUrl(url)).hostname;
+            // 移除 www 前缀以标准化
+            return hostname.replace(/^www\./, '');
+        } catch (e) {
+            console.error('URL解析失败:', url, e);
+            return url;
+        }
+    }
+    
     // 获取网站favicon并缓存到localStorage
     async function getFaviconAndCache(websiteUrl, element) {
         // 首先检查是否有本地缓存（使用与renderShortcuts中相同的键）
-        const hostname = new URL(getFullUrl(websiteUrl)).hostname;
+        const hostname = getStandardHostname(websiteUrl);
         const cacheKey = `favicon_${hostname}`;
         const savedFavicon = await Storage.get(cacheKey);
-        if (savedFavicon) {
-            // 如果有缓存，直接使用，不尝试网络请求
+        if (savedFavicon && savedFavicon.length > 0) {
+            // 如果有缓存且非空，直接使用，不尝试网络请求
             if (element && element.querySelector) {
                 const img = element.querySelector('img');
                 if (img) {
@@ -690,7 +696,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         const fullUrl = getFullUrl(websiteUrl);
-        const hostnameFavicon = new URL(fullUrl).hostname;
+        const hostnameFavicon = getStandardHostname(websiteUrl);
         
         try {
             // 按优先级尝试不同的favicon源
@@ -698,6 +704,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 `${fullUrl}/favicon.png`,
                 `${fullUrl}/favicon.ico`,
                 `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`,
+                `https://icon.horse/icon/${hostname}`,
             ];
             
             // 逐个尝试favicon源
@@ -783,11 +790,38 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
+    // 定期清理旧的favicon缓存，避免存储空间不足
+    async function cleanupOldFavicons() {
+        try {
+            // 获取所有favicon键
+            const faviconKeys = [];
+            await new Promise(resolve => {
+                chrome.storage.local.get(null, (items) => {
+                    Object.keys(items).forEach(key => {
+                        if (key.startsWith('favicon_')) {
+                            faviconKeys.push(key);
+                        }
+                    });
+                    resolve();
+                });
+            });
+            
+            // 如果favicon数量超过100个，清理最旧的一半
+            if (faviconKeys.length > 100) {
+                const keysToRemove = faviconKeys.slice(0, Math.floor(faviconKeys.length / 2));
+                await Storage.remove(keysToRemove);
+                console.log(`清除了 ${keysToRemove.length} 个旧的favicon缓存`);
+            }
+        } catch (error) {
+            console.error('清理旧favicon时出错:', error);
+        }
+    }
+    
     // 当用户编辑快捷方式URL时，清除旧的favicon缓存并获取新的favicon
     async function updateShortcutFavicon(index, newUrl) {
         // 获取旧的URL来删除对应的favicon缓存
         const oldUrl = shortcuts[index].url;
-        const oldHostname = new URL(getFullUrl(oldUrl)).hostname;
+        const oldHostname = getStandardHostname(oldUrl);
         
         // 清除旧的favicon缓存
         await Storage.remove(`favicon_${oldHostname}`);
@@ -803,6 +837,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 页面加载完成后渲染快捷方式
     await renderShortcuts();
+    
+    // 定期清理旧的favicon缓存
+    cleanupOldFavicons();
     
     // 初始化右键菜单颜色模式
     // 不再需要单独调用，因为在updateTextColorClasses中已经处理
