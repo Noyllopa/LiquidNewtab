@@ -5,28 +5,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Received message:', request);
   
   if (request.action === "fetchFavicon") {
-    fetch(request.url, { cache: "force-cache" })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.blob();
-      })
-      .then(blob => {
+    // 使用 XMLHttpRequest 替代 fetch 来更好地处理错误
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', request.url, true);
+    xhr.responseType = 'blob';
+    
+    xhr.onload = function() {
+      if (xhr.status === 200) {
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = function() {
           sendResponse({ success: true, dataUrl: reader.result });
         };
-        reader.onerror = () => {
+        reader.onerror = function() {
           sendResponse({ success: false, error: "Failed to read blob data" });
         };
-        reader.readAsDataURL(blob);
-      })
-      .catch(error => {
-        console.error('Error fetching favicon:', error);
-        sendResponse({ success: false, error: error.message });
-      });
-      
+        reader.readAsDataURL(xhr.response);
+      } else {
+        sendResponse({ success: false, error: `HTTP error! status: ${xhr.status}` });
+      }
+    };
+    
+    xhr.onerror = function() {
+      sendResponse({ success: false, error: "Network error occurred" });
+    };
+    
+    xhr.send();
+    
     // Return true to indicate we will send a response asynchronously
     return true;
   }

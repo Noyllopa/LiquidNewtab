@@ -220,42 +220,8 @@ body {
 
 
 /* 搜索引擎选择器 */
-.engine-selector {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 8px;
-    cursor: pointer;
-    border-radius: 16px;
-    transition: background 0.2s ease;
-    height: 32px;
-    width: auto;
-    flex-shrink: 0;
-    white-space: nowrap;
-    min-width: 60px;
-    color: var(--search-icon);
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-}
-
-.engine-selector {
-    color: white;
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-}
 
 /* 引擎选择器样式已由颜色类控制 */
-.engine-selector:hover {
-    background: var(--capsule-hover);
-}
-
-
 
 .engine-label {
     font-size: 14px;
@@ -335,82 +301,6 @@ body {
 .settings-btn.icon-color-light svg {
     text-shadow: none !important;
     filter: none !important;
-}
-
-/* 搜索引擎下拉菜单 */
-.engine-dropdown {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    width: 120px;
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    border-radius: 16px;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-    z-index: 9999;
-    padding: 8px 0;
-    outline: 0;
-    color: white; /* 深色模式下的文字颜色 */
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); /* 添加文字阴影增强可读性 */
-}
-
-.engine-dropdown.light-bg {
-    color: #333;
-}
-
-.engine-option {
-    display: flex;
-    align-items: center;
-    padding: 12px 16px;
-    cursor: pointer;
-    transition: background 0.2s ease;
-    justify-content: center;
-}
-
-/* 搜索引擎下拉菜单样式 */
-.engine-option:hover {
-    background: rgba(255, 255, 255, 0.1);
-}
-
-.engine-dropdown.light-bg .engine-option:hover {
-    background: rgba(0, 0, 0, 0.1);
-}
-
-/* 确保下拉菜单选项文字颜色正确 */
-.engine-dropdown .engine-option,
-.engine-dropdown .engine-option span {
-    color: white !important;
-}
-
-/* 浅色模式下的文字颜色 */
-.engine-dropdown.light-bg .engine-option,
-.engine-dropdown.light-bg .engine-option span {
-    color: #333 !important;
-}
-
-.engine-option span {
-    font-size: 15px;
-    font-weight: 500;
-    text-align: center;
-}
-
-/* 对话框中的引擎选项样式 */
-.glass-dialog.light-bg .engine-option {
-    color: #333;
-}
-
-.glass-dialog.light-bg .engine-option span {
-    color: #333;
-}
-
-.glass-dialog.dark-mode .engine-option {
-    color: white;
-}
-
-.glass-dialog.dark-mode .engine-option span {
-    color: white;
 }
 
 
@@ -972,67 +862,8 @@ input[type="range"]::-moz-range-thumb {
     margin: 15px 0;
 }
 
-.engine-item {
-    display: flex;
-    align-items: center;
-    padding: 12px;
-    background: rgba(255,255,255,0.05);
-    border-radius: 12px;
-    margin-bottom: 10px;
-    transition: background 0.2s ease;
-    border: 1px solid transparent;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-    outline: 0;
-    cursor: move;
-}
-
-.glass-dialog.light-bg .engine-item {
-    background: rgba(255,255,255,0.5);
-    border: 1px solid transparent;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-    outline: 0;
-}
-
-/* 悬停效果已禁用，以确保拖拽过程中保持默认样式 */
-/*
-.engine-item:hover {
-    background: rgba(255,255,255,0.1);
-}
-
-.glass-dialog.light-bg .engine-item:hover {
-    background: rgba(0,0,0,0.1);
-}
-*/
-
-.engine-item.dragging {
-    opacity: 0.5;
-    background: rgba(255,255,255,0.15);
-}
-
-/* 拖拽相关样式已被禁用，以确保拖拽过程中保持默认样式 */
-/*
-.engine-item.drag-over {
-    border: 1px dashed rgba(255,255,255,0.5);
-    background: rgba(255,255,255,0.1);
-}
-
-.glass-dialog.light-bg .engine-item.drag-over {
-    border: 1px dashed rgba(0,0,0,0.5);
-    background: rgba(0,0,0,0.1);
-}
-*/
-
 .engine-info {
     flex: 1;
-}
-
-.engine-name {
-    font-weight: 500;
-    margin-bottom: 4px;
 }
 
 .glass-dialog.light-bg .engine-name {
@@ -1078,10 +909,7 @@ input[type="range"]::-moz-range-thumb {
 .glass-dialog.light-bg .engine-actions button:hover {
     background: rgba(0,0,0,0.1);
 }
-
-
-
-
+*/
 
 /* 统一设置按钮样式 */
 .settings-buttons { 

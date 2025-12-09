@@ -51,17 +51,14 @@ const Storage = {
 
 document.addEventListener('DOMContentLoaded', async () => {
     // --- 1. 配置与初始化 ---
-    const defaultEngines = {
-        google: { name: "Google", url: "https://www.google.com/search?q=%s" },
-        baidu: { name: "Baidu", url: "https://www.baidu.com/s?wd=%s" },
-        bing: { name: "Bing", url: "https://www.bing.com/search?q=%s" }
-    };
 
-    // 搜索引擎相关元素
-    const engineSelector = document.getElementById('engine-selector');
-    const engineLabel = document.getElementById('engine-label');
-    const engineDropdown = document.getElementById('engine-dropdown');
-    const engineOptions = document.querySelectorAll('.engine-option');
+    // 搜索相关元素
+    const searchInput = document.getElementById('search-input');
+    const searchBtn = document.getElementById('search-btn');
+    
+    // 添加调试日志
+    console.log('Search button element:', searchBtn);
+    console.log('Search input element:', searchInput);
     
     // 设置相关元素
     const settingsBtn = document.getElementById('settings-trigger');
@@ -76,10 +73,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 数据管理元素
     const exportDataBtn = document.getElementById('export-data-btn');
     const importDataInput = document.getElementById('import-data-input');
-
-    // 搜索引擎设置相关元素
-    const engineList = document.getElementById('engine-list');
-    const addEngineBtn = document.getElementById('add-engine-btn');
 
     // 布局设置元素
     const colInput = document.getElementById('setting-cols');
@@ -106,17 +99,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const saveBtn = document.getElementById('save-btn');
     const cancelBtn = document.getElementById('cancel-btn');
     let isEditing = false, editIndex = -1;
-    
-    // 搜索引擎对话框元素
-    const engineDialog = document.getElementById('engine-dialog');
-    const engineNameInput = document.getElementById('engine-name');
-    const engineUrlInput = document.getElementById('engine-url');
-    const engineSaveBtn = document.getElementById('engine-save-btn');
-    const engineCancelBtn = document.getElementById('engine-cancel-btn');
-
-    // 搜索相关元素
-    const searchInput = document.getElementById('search-input');
-    const searchBtn = document.getElementById('search-btn');
 
     // 右键菜单元素
     const contextMenu = document.getElementById('context-menu');
@@ -124,12 +106,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const menuDelete = document.getElementById('menu-delete');
     let contextMenuIndex = -1;
 
-    // 加载保存的搜索引擎列表
-    let engines = JSON.parse(await Storage.get('engines', JSON.stringify({...defaultEngines}))) || {...defaultEngines};
-    
-    // 加载首选搜索引擎
-    let preferredEngine = await Storage.get('preferredEngine', 'google');
-    
     // 默认快捷方式数据
     let shortcuts = JSON.parse(await Storage.get('shortcuts', JSON.stringify([
         { name: "Google", url: "https://google.com" },
@@ -230,13 +206,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 确保在首次加载时始终触发一次颜色检测
     setTimeout(detectBackgroundColor, 100);
 
-    // 初始化搜索引擎设置
-    updateEngineSelector();
-
     // --- 2. 设置面板逻辑 ---
     settingsBtn.addEventListener('click', () => {
         settingsDialog.showModal();
-        renderEngineList();
     });
     
     settingsClose.addEventListener('click', () => settingsDialog.close());
@@ -247,10 +219,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             settingsDialog.close();
         }
     });
-    
-    // 搜索引擎拖动相关变量
-    let dragSrcElement = null;
-    let dragSrcKey = null;
 
     // 布局实时监听
     colInput.addEventListener('input', async (e) => {
@@ -301,177 +269,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
-    // 搜索引擎选择器点击事件
-    engineSelector.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        engineDropdown.classList.toggle('hidden');
-        
-        // 动态定位下拉菜单，确保与图标对齐
-        const selectorRect = engineSelector.getBoundingClientRect();
-        const wrapperRect = document.querySelector('.search-wrapper').getBoundingClientRect();
-        
-        // 水平居中对齐
-        const leftPos = selectorRect.left - wrapperRect.left + (selectorRect.width / 2) - 60; // 60 is half of 120px width
-        // 垂直定位在engine-selector下方
-        const topPos = selectorRect.bottom - wrapperRect.top;
-        
-        engineDropdown.style.left = leftPos + 'px';
-        engineDropdown.style.top = topPos + 'px';
-        
-        // 检测主题以应用正确的下拉菜单样式
-        let isLightMode = false;
-        
-        // 获取当前颜色模式设置
-        const savedColorMode = await Storage.get('colorMode', 'auto');
-        
-        if (savedColorMode === 'auto') {
-            // 自动模式，从存储中获取主题
-            const themeInfo = await Storage.get('backgroundThemeInfo');
-            if (themeInfo) {
-                const parsedTheme = JSON.parse(themeInfo);
-                isLightMode = parsedTheme.theme === 'light';
-            }
-        } else {
-            // 固定模式
-            isLightMode = savedColorMode === 'light';
-        }
-        
-        // 移除直接设置的样式，让CSS规则生效
-        const engineOptions = engineDropdown.querySelectorAll('.engine-option');
-        engineOptions.forEach(option => {
-            const span = option.querySelector('span');
-            option.style.color = '';
-            if (span) span.style.color = '';
-        });
-        
-        if (isLightMode) {
-            engineDropdown.classList.add('light-bg');
-        } else {
-            engineDropdown.classList.remove('light-bg');
-        }
-    });
-
-    // 点击其他地方关闭下拉菜单
-    document.addEventListener('click', (e) => {
-        if (!engineSelector.contains(e.target) && !engineDropdown.contains(e.target)) {
-            engineDropdown.classList.add('hidden');
-        }
-    });
-
-    // 搜索引擎选项点击事件
-    function updateEngineOptions() {
-        // 清空现有选项
-        engineDropdown.innerHTML = '';
-        
-        // 为每个引擎创建选项
-        Object.keys(engines).forEach(key => {
-            const engine = engines[key];
-            const option = document.createElement('div');
-            option.className = 'engine-option';
-            option.dataset.value = key;
-            option.innerHTML = `<span>${engine.name}</span>`;
-            option.addEventListener('click', async () => {
-                preferredEngine = key;
-                await Storage.set('preferredEngine', preferredEngine);
-                updateEngineSelector();
-                engineDropdown.classList.add('hidden');
-            });
-            engineDropdown.appendChild(option);
-        });
-    }
+    // 移除搜索引擎选择器相关事件监听器（已删除HTML元素）
     
-    // 初始更新引擎选项
-    updateEngineOptions();
 
-    // 渲染搜索引擎列表
-    async function renderEngineList() {
-        engineList.innerHTML = '';
-        Object.keys(engines).forEach(key => {
-            const engine = engines[key];
-            const engineItem = document.createElement('div');
-            engineItem.className = 'engine-item';
-            engineItem.draggable = true;
-            engineItem.dataset.key = key;
-            engineItem.innerHTML = `
-                <div class="engine-info">
-                    <div class="engine-name">${engine.name}</div>
-                    <div class="engine-url">${engine.url}</div>
-                </div>
-                <div class="engine-actions">
-                    <button class="edit-engine" data-key="${key}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                        </svg>
-                    </button>
-                    <button class="delete-engine" data-key="${key}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6"></polyline>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
-                    </button>
-                </div>
-            `;
-            engineList.appendChild(engineItem);
-        });
 
-        // 添加编辑和删除事件监听器
-        document.querySelectorAll('.edit-engine').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const key = e.currentTarget.dataset.key;
-                editEngine(key);
-            });
-        });
 
-        document.querySelectorAll('.delete-engine').forEach(button => {
-            button.addEventListener('click', async (e) => {
-                const key = e.currentTarget.dataset.key;
-                await deleteEngine(key);
-            });
-        });
-        
-        // 添加拖动事件监听器
-        await addEngineDragEvents();
-    }
 
-    // 编辑搜索引擎
-    function editEngine(key) {
-        const engine = engines[key];
-        engineNameInput.value = engine.name;
-        engineUrlInput.value = engine.url;
-        isEditing = true;
-        editIndex = key;  // 使用key而不是数字索引，以便区分搜索引擎和快捷方式
-        engineDialog.showModal();
-    }
 
-    // 删除搜索引擎
-    async function deleteEngine(key) {
-        // 确保至少有一个搜索引擎
-        if (Object.keys(engines).length <= 1) {
-            alert('至少需要保留一个搜索引擎');
-            return;
-        }
 
-        // 如果删除的是当前首选搜索引擎，则切换到第一个搜索引擎
-        if (preferredEngine === key) {
-            const engineKeys = Object.keys(engines);
-            const firstEngineKey = engineKeys.find(k => k !== key);
-            preferredEngine = firstEngineKey;
-            await Storage.set('preferredEngine', preferredEngine);
-            updateEngineSelector();
-        }
 
-        delete engines[key];
-        await Storage.set('engines', JSON.stringify(engines));
-        renderEngineList();
-    }
-
-    // 添加搜索引擎按钮事件
-    addEngineBtn.addEventListener('click', () => {
-        engineNameInput.value = '';
-        engineUrlInput.value = '';
-        engineDialog.showModal();
-    });
 
     // 保存搜索引擎
     saveBtn.addEventListener('click', async () => {
@@ -484,35 +290,27 @@ document.addEventListener('DOMContentLoaded', async () => {
             let finalUrl = url;
             if (!url.startsWith('http')) finalUrl = 'https://' + url;
             if (isEditing) {
-                // 检查是否在编辑搜索引擎
-                if (editIndex in engines) {
-                    // 编辑搜索引擎
-                    engines[editIndex] = { name, url: finalUrl };
-                    await Storage.set('engines', JSON.stringify(engines));
-                    renderEngineList();
-                    updateEngineSelector();
-                } else {
-                    // 检查URL是否发生变化
-                    const oldUrl = shortcuts[editIndex].url;
-                    const urlChanged = oldUrl !== finalUrl;
-                    
-                    // 编辑快捷方式
-                    shortcuts[editIndex] = { name, url: finalUrl };
-                    // 如果提供了图标（包括空字符串），则设置图标属性
-                    if (icon !== undefined && icon !== null) {
-                        shortcuts[editIndex].icon = icon || undefined;
-                    } else if (shortcuts[editIndex].icon) {
-                        // 如果原来有图标但没有提供新图标，则保留原图标
-                        // 这种情况理论上不会发生，因为input会保留原值
-                    }
-                    // 保存到localStorage
-                    await Storage.set('shortcuts', JSON.stringify(shortcuts));
-                    await renderShortcuts();
-                    
-                    // 如果URL改变了，更新favicon
-                    if (urlChanged) {
-                        await updateShortcutFavicon(editIndex, finalUrl);
-                    }
+                // 检查是否在编辑搜索引擎（这部分逻辑已移除）
+                // 检查URL是否发生变化
+                const oldUrl = shortcuts[editIndex].url;
+                const urlChanged = oldUrl !== finalUrl;
+                
+                // 编辑快捷方式
+                shortcuts[editIndex] = { name, url: finalUrl };
+                // 如果提供了图标（包括空字符串），则设置图标属性
+                if (icon !== undefined && icon !== null) {
+                    shortcuts[editIndex].icon = icon || undefined;
+                } else if (shortcuts[editIndex].icon) {
+                    // 如果原来有图标但没有提供新图标，则保留原图标
+                    // 这种情况理论上不会发生，因为input会保留原值
+                }
+                // 保存到localStorage
+                await Storage.set('shortcuts', JSON.stringify(shortcuts));
+                await renderShortcuts();
+                
+                // 如果URL改变了，更新favicon
+                if (urlChanged) {
+                    await updateShortcutFavicon(editIndex, finalUrl);
                 }
             } else {
                 const newItem = { name, url: finalUrl };
@@ -527,198 +325,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
     
-    // 保存搜索引擎对话框
-    engineSaveBtn.addEventListener('click', async () => {
-        const name = engineNameInput.value.trim();
-        const url = engineUrlInput.value.trim();
-        
-        if (name && url) {
-            // 检查URL是否包含 %s 占位符
-            if (!url.includes('%s')) {
-                alert('URL 必须包含 %s 作为搜索词占位符');
-                return;
-            }
-            
-            if (isEditing) {
-                // 编辑现有搜索引擎
-                engines[editIndex] = { name, url };
-            } else {
-                // 添加新的搜索引擎
-                // 使用时间戳生成唯一键，避免名称冲突
-                const timestamp = new Date().getTime();
-                const randomSuffix = Math.random().toString(36).substring(2, 8);
-                const key = `engine_${timestamp}_${randomSuffix}`;
-                engines[key] = { name, url };
-            }
-            
-            await Storage.set('engines', JSON.stringify(engines));
-            renderEngineList();
-            updateEngineOptions(); // 更新下拉菜单选项
-            engineDialog.close();
-            updateEngineSelector();
-        }
-    });
+
 
     cancelBtn.addEventListener('click', () => editDialog.close());
-    engineCancelBtn.addEventListener('click', () => engineDialog.close());
+    // engineCancelBtn.addEventListener('click', () => engineDialog.close()); // 已删除相关HTML元素
 
-    // 更新搜索引擎选择器显示
-    function updateEngineSelector() {
-        if (engines[preferredEngine]) {
-            engineLabel.textContent = engines[preferredEngine].name;
-        } else {
-            // 如果首选搜索引擎不存在，使用第一个可用的
-            const firstEngineKey = Object.keys(engines)[0];
-            preferredEngine = firstEngineKey;
-            engineLabel.textContent = engines[firstEngineKey].name;
-        }
-        // 更新下拉菜单选项
-        updateEngineOptions();
-    }
+
     
-    // 添加搜索引擎拖动事件
-    function addEngineDragEvents() {
-        const engineItems = document.querySelectorAll('.engine-item');
-        
-        engineItems.forEach(item => {
-            item.addEventListener('dragstart', handleEngineDragStart);
-            item.addEventListener('dragover', handleEngineDragOver);
-            item.addEventListener('dragenter', handleEngineDragEnter);
-            item.addEventListener('dragleave', handleEngineDragLeave);
-            item.addEventListener('drop', handleEngineDrop);
-            item.addEventListener('dragend', handleEngineDragEnd);
-        });
-    }
+
     
-    function handleEngineDragStart(e) {
-        dragSrcElement = this;
-        dragSrcKey = this.dataset.key;
-        
-        // 设置拖动效果
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/html', this.innerHTML);
-        
-        // 添加视觉反馈
-        this.classList.add('dragging');
-        
-        // 在开始拖拽时清除所有元素的 drag-over 样式
-        document.querySelectorAll('.engine-item').forEach(item => {
-            item.classList.remove('drag-over');
-        });
-    }
-    
-    function handleEngineDragOver(e) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        
-        // 阻止不必要的操作
-        if (this === dragSrcElement) {
-            return;
-        }
-        
-        // 获取鼠标位置
-        const rect = this.getBoundingClientRect();
-        const midpoint = (rect.top + rect.bottom) / 2;
-        
-        // 根据鼠标位置决定放置在前面还是后面
-        if (e.clientY < midpoint) {
-            // 插入到当前元素之前
-            engineList.insertBefore(dragSrcElement, this);
-        } else {
-            // 插入到当前元素之后
-            engineList.insertBefore(dragSrcElement, this.nextSibling);
-        }
-        
-        return false;
-    }
-    
-    function handleEngineDragEnter(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        // 不再添加 drag-over 样式，保持默认样式
-    }
-    
-    function handleEngineDragLeave(e) {
-        // 不需要做任何事，保持默认样式
-    }
-    
-    function handleEngineDrop(e) {
-        e.stopPropagation();
-        
-        // 清除拖拽相关的类
-        document.querySelectorAll('.engine-item').forEach(item => {
-            item.classList.remove('dragging');
-            item.classList.remove('drag-over');
-        });
-        
-        // 拖动结束后，根据DOM顺序更新实际数据
-        updateEnginesOrderFromDOM();
-        
-        return false;
-    }
-    
-    function handleEngineDragEnd(e) {
-        // 确保所有拖动相关的类都被清理
-        document.querySelectorAll('.engine-item').forEach(item => {
-            item.classList.remove('dragging');
-            item.classList.remove('drag-over');
-        });
-    }
-    
-    // 根据DOM顺序更新搜索引擎实际顺序
-    async function updateEnginesOrderFromDOM() {
-        const engineItems = document.querySelectorAll('.engine-item');
-        const newEngineKeys = Array.from(engineItems).map(item => item.dataset.key);
-        
-        // 创建新的引擎对象，保持DOM中的顺序
-        const reorderedEngines = {};
-        newEngineKeys.forEach(key => {
-            reorderedEngines[key] = engines[key];
-        });
-        
-        // 更新引擎对象
-        engines = reorderedEngines;
-        
-        // 保存到本地存储
-        await Storage.set('engines', JSON.stringify(engines));
-        
-        // 更新搜索引擎选择器
-        updateEngineSelector();
-        updateEngineOptions();
-    }
-    
-    // 重新排列搜索引擎顺序（用于外部调用，如删除时）
-    async function reorderEngines(fromKey, toKey) {
-        // 创建一个新的引擎对象，保持顺序
-        const engineKeys = Object.keys(engines);
-        const fromIndex = engineKeys.indexOf(fromKey);
-        const toIndex = engineKeys.indexOf(toKey);
-        
-        if (fromIndex !== -1 && toIndex !== -1) {
-            // 重新排列数组
-            const movedItem = engineKeys.splice(fromIndex, 1)[0];
-            engineKeys.splice(toIndex, 0, movedItem);
-            
-            // 根据新顺序创建新的引擎对象
-            const reorderedEngines = {};
-            engineKeys.forEach(key => {
-                reorderedEngines[key] = engines[key];
-            });
-            
-            // 更新引擎对象
-            engines = reorderedEngines;
-            
-            // 保存到本地存储
-            await Storage.set('engines', JSON.stringify(engines));
-            
-            // 重新渲染列表
-            renderEngineList();
-            
-            // 更新搜索引擎选择器
-            updateEngineSelector();
-            updateEngineOptions();
-        }
-    }
+
 
     // 图片压缩函数
     function compressImage(src, quality = 0.7) {
@@ -844,8 +460,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     exportDataBtn.addEventListener('click', async () => {
         // 收集所有需要导出的数据
         const exportData = {
-            engines: engines,
-            preferredEngine: preferredEngine,
             shortcuts: shortcuts,
             gridCols: await Storage.get('gridCols', 5),
             gridSize: await Storage.get('gridSize', 110),
@@ -893,16 +507,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const importData = JSON.parse(event.target.result);
                 
                 // 导入数据
-                if (importData.engines) {
-                    engines = importData.engines;
-                    await Storage.set('engines', JSON.stringify(engines));
-                }
-                
-                if (importData.preferredEngine) {
-                    preferredEngine = importData.preferredEngine;
-                    await Storage.set('preferredEngine', preferredEngine);
-                }
-                
                 if (importData.shortcuts) {
                     shortcuts = importData.shortcuts;
                     await Storage.set('shortcuts', JSON.stringify(shortcuts));
@@ -981,8 +585,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
                 document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${colorMode}"]`).classList.add('active');
                 
-                updateEngineSelector();
-                renderEngineList();
                 await renderShortcuts();
                 
                 alert('数据导入成功！');
@@ -999,18 +601,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- 3. 搜索功能 ---
     function performSearch() {
         const query = searchInput.value.trim();
+        console.log('Performing search for:', query); // 添加调试日志
         if (query) {
-            // 获取首选搜索引擎的URL
-            const engine = engines[preferredEngine];
-            if (engine) {
-                const searchUrl = engine.url.replace('%s', encodeURIComponent(query));
-                window.location.href = searchUrl;
-            }
+            // 使用 chrome.search.query API 执行搜索
+            chrome.search.query({
+                text: query
+            });
         }
     }
     
+    // 添加调试日志
+    console.log('Adding event listeners to search button');
     searchBtn.addEventListener('click', performSearch);
-    searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') performSearch(); });
+    searchInput.addEventListener('keypress', (e) => { 
+        if (e.key === 'Enter') performSearch(); 
+    });
 
     // --- 4. 快捷方式渲染 ---
     async function renderShortcuts() {
@@ -1092,7 +697,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const faviconUrls = [
                 `${fullUrl}/favicon.png`,
                 `${fullUrl}/favicon.ico`,
-                `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`,
+                `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`,
             ];
             
             // 逐个尝试favicon源
@@ -1756,8 +1361,5 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-
-
     initDragAndDrop();
-    renderEngineList();
 });

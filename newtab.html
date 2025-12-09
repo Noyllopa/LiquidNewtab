@@ -62,19 +62,12 @@
     <div class="main-layout">
         <div class="search-wrapper">
             <div class="search-capsule glass-element">
-                <div class="engine-selector" id="engine-selector">
-                    <span class="engine-label" id="engine-label">Google</span>
-                </div>
-                <div class="divider"></div>
                 <input type="text" id="search-input" placeholder="" autocomplete="off">
                 <button id="search-btn" class="icon-hover">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 </button>
             </div>
 
-            <!-- 搜索引擎选择下拉菜单 -->
-            <div id="engine-dropdown" class="engine-dropdown hidden">
-            </div>
         </div>
 
         <div class="grid-container" id="shortcuts-grid">
@@ -97,16 +90,6 @@
         <div class="dialog-actions">
             <button id="cancel-btn" class="glass-btn">取消</button>
             <button id="save-btn" class="glass-btn primary">保存</button>
-        </div>
-    </dialog>
-    
-    <dialog id="engine-dialog" class="glass-dialog">
-        <h3 class="dialog-title">添加搜索引擎</h3>
-        <input type="text" id="engine-name" placeholder="名称" class="glass-input">
-        <input type="text" id="engine-url" placeholder="URL (使用 %s 作为占位符)" class="glass-input">
-        <div class="dialog-actions">
-            <button id="engine-cancel-btn" class="glass-btn">取消</button>
-            <button id="engine-save-btn" class="glass-btn primary">保存</button>
         </div>
     </dialog>
 
@@ -184,14 +167,6 @@
                     </label>
                 </div>
                 <button id="bg-reset-btn" class="glass-btn full-width danger">恢复默认背景</button>
-            </div>
-
-            <div class="settings-section">
-                <h4>搜索引擎</h4>
-                <div class="engine-list-container">
-                    <div id="engine-list" class="engine-list"></div>
-                    <button id="add-engine-btn" class="glass-btn full-width">添加搜索引擎</button>
-                </div>
             </div>
 
             <div class="settings-section">
