@@ -727,7 +727,6 @@ input[type="range"]::-moz-range-thumb {
 
 .settings-section label span {
     display: inline-block;
-    width: 60px;
     margin-right: 10px;
     vertical-align: middle;
 }
@@ -929,6 +928,8 @@ input[type="range"]::-moz-range-thumb {
     box-sizing: border-box;
     margin: 0;
     line-height: 1;
+    text-align: center;
+    white-space: nowrap;
 }
 
 .settings-button.glass-btn span {
@@ -936,9 +937,17 @@ input[type="range"]::-moz-range-thumb {
     align-items: center;
     justify-content: center;
     line-height: 1;
+    text-align: center;
+    margin-right: 0;
 }
 
 /* 背景设置按钮特定样式 */
+.bg-options {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
 .bg-options .settings-button.glass-btn {
     flex-direction: column;
     gap: 5px;
@@ -946,6 +955,10 @@ input[type="range"]::-moz-range-thumb {
     line-height: 1;
     align-items: center;
     justify-content: center;
+    height: 66px;
+    min-height: 66px;
+    text-align: center;
+    white-space: nowrap;
 }
 
 /* 为随机Unsplash按钮单独设置样式 */
@@ -957,6 +970,16 @@ input[type="range"]::-moz-range-thumb {
     gap: 5px;
     height: 66px;
     min-height: 66px;
+    text-align: center;
+}
+
+#bg-unsplash-btn span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    text-align: center;
+    margin-right: 0;
 }
 
 /* 为上传图片按钮单独设置样式 */
@@ -969,6 +992,16 @@ input[type="range"]::-moz-range-thumb {
     cursor: pointer;
     height: 66px;
     min-height: 66px;
+    text-align: center;
+}
+
+#bg-upload-input + label span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    text-align: center;
+    margin-right: 0;
 }
 
 /* 确保SVG图标在按钮中正确显示 */
@@ -979,15 +1012,32 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* 数据管理按钮特定样式 */
+.data-management {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
 .data-management .settings-button.glass-btn {
-    flex-direction: row;
-    gap: 8px;
-    font-size: 14px;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 13px;
     line-height: 1;
     height: 66px;
     min-height: 66px;
     align-items: center;
     justify-content: center;
+    text-align: center;
+    white-space: nowrap;
+}
+
+#export-data-btn span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    text-align: center;
+    margin-right: 0;
 }
 
 /* 确保数据管理按钮中的SVG图标正确显示 */
@@ -1011,15 +1061,28 @@ input[type="range"]::-moz-range-thumb {
     line-height: 1;
     align-items: center;
     justify-content: center;
+    text-align: center;
+    white-space: nowrap;
 }
 
 /* 确保数据管理按钮中的label元素正确显示图标 */
 .data-management label.settings-button.glass-btn {
     display: inline-flex;
-    flex-direction: row;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 5px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+#import-data-input + label span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    text-align: center;
+    margin-right: 0;
 }
 
 .settings-buttons label.settings-button.glass-btn span {
@@ -1027,6 +1090,8 @@ input[type="range"]::-moz-range-thumb {
     align-items: center;
     justify-content: center;
     line-height: 1;
+    text-align: center;
+    margin-right: 0;
 }
 
 /* 右键菜单 */
