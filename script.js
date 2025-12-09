@@ -601,10 +601,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- 3. 搜索功能 ---
     function performSearch() {
         const query = searchInput.value.trim();
-        console.log('Performing search for:', query); // 添加调试日志
         if (query) {
-            // 使用 chrome.search.query API 执行搜索
-            chrome.search.query({
+            chrome.runtime.sendMessage({
+                action: "performSearch",
                 text: query
             });
         }
