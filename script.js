@@ -1,7 +1,28 @@
+// --- chrome.storage.local 兼容 localStorage 层 ---
+const Storage = {
+    get(key, defaultVal = null) {
+        return new Promise(resolve => {
+            chrome.storage.local.get([key], res => {
+                resolve(res[key] ?? defaultVal);
+            });
+        });
+    },
+    set(key, value) {
+        return new Promise(resolve => {
+            chrome.storage.local.set({ [key]: value }, resolve);
+        });
+    },
+    remove(key) {
+        return new Promise(resolve => {
+            chrome.storage.local.remove(key, resolve);
+        });
+    }
+};
+
 // 在页面加载早期获取并应用自定义背景，避免闪烁
-(function() {
+(async function() {
     // 立即获取自定义背景设置
-    const savedBg = localStorage.getItem('customBg');
+    const savedBg = await Storage.get('customBg');
     const preloadBg = document.createElement('div');
     preloadBg.id = 'preload-bg';
     preloadBg.className = 'preloaded-bg';
@@ -28,7 +49,7 @@
     }
 })();
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // --- 1. 配置与初始化 ---
     const defaultEngines = {
         google: { name: "Google", url: "https://www.google.com/search?q=%s" },
@@ -104,13 +125,18 @@ document.addEventListener('DOMContentLoaded', () => {
     let contextMenuIndex = -1;
 
     // 加载保存的搜索引擎列表
-    let engines = JSON.parse(localStorage.getItem('engines')) || {...defaultEngines};
+    let engines = JSON.parse(await Storage.get('engines', JSON.stringify({...defaultEngines}))) || {...defaultEngines};
     
     // 加载首选搜索引擎
-    let preferredEngine = localStorage.getItem('preferredEngine') || 'google';
+    let preferredEngine = await Storage.get('preferredEngine', 'google');
     
     // 默认快捷方式数据
-    let shortcuts = JSON.parse(localStorage.getItem('shortcuts')) || [
+    let shortcuts = JSON.parse(await Storage.get('shortcuts', JSON.stringify([
+        { name: "Google", url: "https://google.com" },
+        { name: "Bilibili", url: "https://bilibili.com" },
+        { name: "GitHub", url: "https://github.com" },
+        { name: "Unsplash", url: "https://unsplash.com" }
+    ]))) || [
         { name: "Google", url: "https://google.com" },
         { name: "Bilibili", url: "https://bilibili.com" },
         { name: "GitHub", url: "https://github.com" },
@@ -118,9 +144,9 @@ document.addEventListener('DOMContentLoaded', () => {
     ];
 
     // 加载并应用布局设置
-    const savedCols = localStorage.getItem('gridCols') || 5;
-    const savedSize = localStorage.getItem('gridSize') || 110;
-    const savedScale = localStorage.getItem('scale') || 100;
+    const savedCols = await Storage.get('gridCols', 5);
+    const savedSize = await Storage.get('gridSize', 110);
+    const savedScale = await Storage.get('scale', 100);
     document.documentElement.style.setProperty('--col-count', savedCols);
     document.documentElement.style.setProperty('--item-size', `${savedSize}px`);
     document.documentElement.style.setProperty('--scale', savedScale / 100);
@@ -129,14 +155,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const body = document.body;
     let preloadBg = document.getElementById('preload-bg');
 
-    function applyBackground(bgUrl) {
+    async function applyBackground(bgUrl) {
         // 确保preloadBg元素存在
         if (!preloadBg) {
             preloadBg = document.getElementById('preload-bg');
         }
         
         // 清除存储的主题信息
-        localStorage.removeItem('backgroundThemeInfo');
+        await Storage.remove('backgroundThemeInfo');
         
         if (bgUrl && bgUrl !== 'none') {
             // 直接应用背景图片，不再等待onload事件以提升加载速度
@@ -174,13 +200,13 @@ document.addEventListener('DOMContentLoaded', () => {
     scaleValDisplay.innerText = savedScale + '%';
     
     // 初始化颜色模式设置
-    const savedColorMode = localStorage.getItem('colorMode') || 'auto';
+    const savedColorMode = await Storage.get('colorMode', 'auto');
     document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${savedColorMode}"]`).classList.add('active');
 
     // 监听系统主题变化
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    mediaQuery.addEventListener('change', (e) => {
-        const currentColorMode = localStorage.getItem('colorMode') || 'auto';
+    mediaQuery.addEventListener('change', async (e) => {
+        const currentColorMode = await Storage.get('colorMode', 'auto');
         if (currentColorMode === 'auto') {
             // 如果是自动模式，重新检测背景颜色并更新主题
             detectBackgroundColor();
@@ -193,7 +219,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (autoButton && !autoButton.classList.contains('active')) {
             autoButton.classList.add('active');
         }
+        
+        // 在自动模式下，立即检测背景颜色
+        detectBackgroundColor();
+    } else {
+        // 对于非自动模式，也要确保颜色类正确应用
+        await applyColorMode(savedColorMode);
     }
+    
+    // 确保在首次加载时始终触发一次颜色检测
+    setTimeout(detectBackgroundColor, 100);
 
     // 初始化搜索引擎设置
     updateEngineSelector();
@@ -218,27 +253,27 @@ document.addEventListener('DOMContentLoaded', () => {
     let dragSrcKey = null;
 
     // 布局实时监听
-    colInput.addEventListener('input', (e) => {
+    colInput.addEventListener('input', async (e) => {
         colValDisplay.innerText = e.target.value;
         document.documentElement.style.setProperty('--col-count', e.target.value);
-        localStorage.setItem('gridCols', e.target.value);
+        await Storage.set('gridCols', e.target.value);
     });
     
-    sizeInput.addEventListener('input', (e) => {
+    sizeInput.addEventListener('input', async (e) => {
         document.documentElement.style.setProperty('--item-size', `${e.target.value}px`);
-        localStorage.setItem('gridSize', e.target.value);
+        await Storage.set('gridSize', e.target.value);
     });
     
-    scaleInput.addEventListener('input', (e) => {
+    scaleInput.addEventListener('input', async (e) => {
         scaleValDisplay.innerText = e.target.value + '%';
         const scaleValue = e.target.value / 100;
         document.documentElement.style.setProperty('--scale', scaleValue);
-        localStorage.setItem('scale', e.target.value);
+        await Storage.set('scale', e.target.value);
     });
     
     // 颜色模式设置监听
     colorModeButtons.forEach(button => {
-        button.addEventListener('click', (e) => {
+        button.addEventListener('click', async (e) => {
             // 移除所有按钮的激活状态
             colorModeButtons.forEach(btn => btn.classList.remove('active'));
             
@@ -249,25 +284,25 @@ document.addEventListener('DOMContentLoaded', () => {
             const mode = button.dataset.mode;
             
             // 保存设置
-            localStorage.setItem('colorMode', mode);
+            await Storage.set('colorMode', mode);
             
             // 如果是从特定颜色模式切换到自动模式，立即执行颜色检测
             if (mode === 'auto') {
                 // 清除旧的主题信息，强制重新计算
-                localStorage.removeItem('backgroundThemeInfo');
+                await Storage.remove('backgroundThemeInfo');
                 // 执行颜色模式应用
                 applyColorMode(mode);
             } else {
                 // 应用指定的颜色模式
                 applyColorMode(mode);
                 // 移除背景主题信息，避免自动模式切换回来时使用旧数据
-                localStorage.removeItem('backgroundThemeInfo');
+                await Storage.remove('backgroundThemeInfo');
             }
         });
     });
 
     // 搜索引擎选择器点击事件
-    engineSelector.addEventListener('click', (e) => {
+    engineSelector.addEventListener('click', async (e) => {
         e.stopPropagation();
         engineDropdown.classList.toggle('hidden');
         
@@ -287,11 +322,11 @@ document.addEventListener('DOMContentLoaded', () => {
         let isLightMode = false;
         
         // 获取当前颜色模式设置
-        const savedColorMode = localStorage.getItem('colorMode') || 'auto';
+        const savedColorMode = await Storage.get('colorMode', 'auto');
         
         if (savedColorMode === 'auto') {
             // 自动模式，从存储中获取主题
-            const themeInfo = localStorage.getItem('backgroundThemeInfo');
+            const themeInfo = await Storage.get('backgroundThemeInfo');
             if (themeInfo) {
                 const parsedTheme = JSON.parse(themeInfo);
                 isLightMode = parsedTheme.theme === 'light';
@@ -335,9 +370,9 @@ document.addEventListener('DOMContentLoaded', () => {
             option.className = 'engine-option';
             option.dataset.value = key;
             option.innerHTML = `<span>${engine.name}</span>`;
-            option.addEventListener('click', () => {
+            option.addEventListener('click', async () => {
                 preferredEngine = key;
-                localStorage.setItem('preferredEngine', preferredEngine);
+                await Storage.set('preferredEngine', preferredEngine);
                 updateEngineSelector();
                 engineDropdown.classList.add('hidden');
             });
@@ -349,7 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateEngineOptions();
 
     // 渲染搜索引擎列表
-    function renderEngineList() {
+    async function renderEngineList() {
         engineList.innerHTML = '';
         Object.keys(engines).forEach(key => {
             const engine = engines[key];
@@ -389,14 +424,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         document.querySelectorAll('.delete-engine').forEach(button => {
-            button.addEventListener('click', (e) => {
+            button.addEventListener('click', async (e) => {
                 const key = e.currentTarget.dataset.key;
-                deleteEngine(key);
+                await deleteEngine(key);
             });
         });
         
         // 添加拖动事件监听器
-        addEngineDragEvents();
+        await addEngineDragEvents();
     }
 
     // 编辑搜索引擎
@@ -410,7 +445,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 删除搜索引擎
-    function deleteEngine(key) {
+    async function deleteEngine(key) {
         // 确保至少有一个搜索引擎
         if (Object.keys(engines).length <= 1) {
             alert('至少需要保留一个搜索引擎');
@@ -422,12 +457,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const engineKeys = Object.keys(engines);
             const firstEngineKey = engineKeys.find(k => k !== key);
             preferredEngine = firstEngineKey;
-            localStorage.setItem('preferredEngine', preferredEngine);
+            await Storage.set('preferredEngine', preferredEngine);
             updateEngineSelector();
         }
 
         delete engines[key];
-        localStorage.setItem('engines', JSON.stringify(engines));
+        await Storage.set('engines', JSON.stringify(engines));
         renderEngineList();
     }
 
@@ -439,7 +474,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 保存搜索引擎
-    saveBtn.addEventListener('click', () => {
+    saveBtn.addEventListener('click', async () => {
         const name = nameInput.value.trim();
         const url = urlInput.value.trim();
         const icon = iconInput.value.trim(); // 获取图标URL
@@ -453,7 +488,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (editIndex in engines) {
                     // 编辑搜索引擎
                     engines[editIndex] = { name, url: finalUrl };
-                    localStorage.setItem('engines', JSON.stringify(engines));
+                    await Storage.set('engines', JSON.stringify(engines));
                     renderEngineList();
                     updateEngineSelector();
                 } else {
@@ -471,12 +506,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         // 这种情况理论上不会发生，因为input会保留原值
                     }
                     // 保存到localStorage
-                    localStorage.setItem('shortcuts', JSON.stringify(shortcuts));
-                    renderShortcuts();
+                    await Storage.set('shortcuts', JSON.stringify(shortcuts));
+                    await renderShortcuts();
                     
                     // 如果URL改变了，更新favicon
                     if (urlChanged) {
-                        updateShortcutFavicon(editIndex, finalUrl);
+                        await updateShortcutFavicon(editIndex, finalUrl);
                     }
                 }
             } else {
@@ -484,8 +519,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (icon) newItem.icon = icon; // 只有当图标URL存在且非空时才添加
                 shortcuts.push(newItem);
                 // 保存到localStorage
-                localStorage.setItem('shortcuts', JSON.stringify(shortcuts));
-                renderShortcuts(); 
+                await Storage.set('shortcuts', JSON.stringify(shortcuts));
+                await renderShortcuts(); 
             }
             
             editDialog.close();
@@ -493,7 +528,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // 保存搜索引擎对话框
-    engineSaveBtn.addEventListener('click', () => {
+    engineSaveBtn.addEventListener('click', async () => {
         const name = engineNameInput.value.trim();
         const url = engineUrlInput.value.trim();
         
@@ -516,7 +551,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 engines[key] = { name, url };
             }
             
-            localStorage.setItem('engines', JSON.stringify(engines));
+            await Storage.set('engines', JSON.stringify(engines));
             renderEngineList();
             updateEngineOptions(); // 更新下拉菜单选项
             engineDialog.close();
@@ -631,7 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // 根据DOM顺序更新搜索引擎实际顺序
-    function updateEnginesOrderFromDOM() {
+    async function updateEnginesOrderFromDOM() {
         const engineItems = document.querySelectorAll('.engine-item');
         const newEngineKeys = Array.from(engineItems).map(item => item.dataset.key);
         
@@ -645,7 +680,7 @@ document.addEventListener('DOMContentLoaded', () => {
         engines = reorderedEngines;
         
         // 保存到本地存储
-        localStorage.setItem('engines', JSON.stringify(engines));
+        await Storage.set('engines', JSON.stringify(engines));
         
         // 更新搜索引擎选择器
         updateEngineSelector();
@@ -653,7 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // 重新排列搜索引擎顺序（用于外部调用，如删除时）
-    function reorderEngines(fromKey, toKey) {
+    async function reorderEngines(fromKey, toKey) {
         // 创建一个新的引擎对象，保持顺序
         const engineKeys = Object.keys(engines);
         const fromIndex = engineKeys.indexOf(fromKey);
@@ -674,7 +709,7 @@ document.addEventListener('DOMContentLoaded', () => {
             engines = reorderedEngines;
             
             // 保存到本地存储
-            localStorage.setItem('engines', JSON.stringify(engines));
+            await Storage.set('engines', JSON.stringify(engines));
             
             // 重新渲染列表
             renderEngineList();
@@ -751,9 +786,9 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // 预加载图片以减少闪烁
             const img = new Image();
-            img.onload = function() {
-                localStorage.setItem('customBg', compressedImage);
-                applyBackground(compressedImage);
+            img.onload = async function() {
+                await Storage.set('customBg', compressedImage);
+                await applyBackground(compressedImage);
             };
             img.src = compressedImage;
         } catch (error) {
@@ -785,9 +820,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // 预加载图片以减少闪烁
                 const img = new Image();
-                img.onload = function() {
-                    localStorage.setItem('customBg', compressedImage);
-                    applyBackground(compressedImage);
+                img.onload = async function() {
+                    await Storage.set('customBg', compressedImage);
+                    await applyBackground(compressedImage);
                 };
                 img.src = compressedImage;
             } catch (e) {
@@ -798,35 +833,40 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // [背景功能 3] 重置背景
-    bgResetBtn.addEventListener('click', () => {
-        localStorage.removeItem('customBg');
-        localStorage.removeItem('backgroundThemeInfo'); // 同时清除主题信息
-        applyBackground('none');
+    bgResetBtn.addEventListener('click', async () => {
+        await Storage.remove('customBg');
+        await Storage.remove('backgroundThemeInfo'); // 同时清除主题信息
+        await applyBackground('none');
         bgUploadInput.value = ''; // 清空文件 input
     });
 
     // 数据导出功能
-    exportDataBtn.addEventListener('click', () => {
+    exportDataBtn.addEventListener('click', async () => {
         // 收集所有需要导出的数据
         const exportData = {
             engines: engines,
             preferredEngine: preferredEngine,
             shortcuts: shortcuts,
-            gridCols: localStorage.getItem('gridCols') || 5,
-            gridSize: localStorage.getItem('gridSize') || 110,
-            scale: localStorage.getItem('scale') || 100, // 添加显示比例设置
-            customBg: localStorage.getItem('customBg') || null,
-            colorMode: localStorage.getItem('colorMode') || 'auto' // 添加颜色模式设置
+            gridCols: await Storage.get('gridCols', 5),
+            gridSize: await Storage.get('gridSize', 110),
+            scale: await Storage.get('scale', 100), // 添加显示比例设置
+            customBg: await Storage.get('customBg'),
+            colorMode: await Storage.get('colorMode', 'auto') // 添加颜色模式设置
         };
         
         // 收集所有favicon缓存
         const favicons = {};
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key.startsWith('favicon_')) {
-                favicons[key] = localStorage.getItem(key);
-            }
-        }
+        // 获取所有存储项
+        await new Promise(resolve => {
+            chrome.storage.local.get(null, (items) => {
+                Object.keys(items).forEach(key => {
+                    if (key.startsWith('favicon_')) {
+                        favicons[key] = items[key];
+                    }
+                });
+                resolve();
+            });
+        });
         exportData.favicons = favicons;
 
         // 创建一个 Blob 对象并下载
@@ -843,94 +883,107 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 数据导入功能
-    importDataInput.addEventListener('change', (e) => {
+    importDataInput.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
         const reader = new FileReader();
-        reader.onload = function(event) {
+        reader.onload = async function(event) {
             try {
                 const importData = JSON.parse(event.target.result);
                 
                 // 导入数据
                 if (importData.engines) {
                     engines = importData.engines;
-                    localStorage.setItem('engines', JSON.stringify(engines));
+                    await Storage.set('engines', JSON.stringify(engines));
                 }
                 
                 if (importData.preferredEngine) {
                     preferredEngine = importData.preferredEngine;
-                    localStorage.setItem('preferredEngine', preferredEngine);
+                    await Storage.set('preferredEngine', preferredEngine);
                 }
                 
                 if (importData.shortcuts) {
                     shortcuts = importData.shortcuts;
-                    localStorage.setItem('shortcuts', JSON.stringify(shortcuts));
+                    await Storage.set('shortcuts', JSON.stringify(shortcuts));
                 }
                 
                 if (importData.gridCols) {
-                    localStorage.setItem('gridCols', importData.gridCols);
+                    await Storage.set('gridCols', importData.gridCols);
                 }
                 
                 if (importData.gridSize) {
-                    localStorage.setItem('gridSize', importData.gridSize);
+                    await Storage.set('gridSize', importData.gridSize);
                 }
                 
                 // 导入显示比例设置
                 if (importData.scale !== undefined) {
-                    localStorage.setItem('scale', importData.scale);
+                    await Storage.set('scale', importData.scale);
                 }
                 
                 if (importData.customBg !== undefined) {
                     if (importData.customBg) {
-                        localStorage.setItem('customBg', importData.customBg);
+                        await Storage.set('customBg', importData.customBg);
                     } else {
-                        localStorage.removeItem('customBg');
+                        await Storage.remove('customBg');
                     }
-                    localStorage.removeItem('backgroundThemeInfo'); // 清除主题信息
-                    applyBackground(importData.customBg || null);
+                    await Storage.remove('backgroundThemeInfo'); // 清除主题信息
+                    await applyBackground(importData.customBg || null);
                 }
                 
                 // 导入颜色模式设置
                 if (importData.colorMode !== undefined) {
-                    localStorage.setItem('colorMode', importData.colorMode);
+                    await Storage.set('colorMode', importData.colorMode);
                 }
                 
                 // 导入favicon缓存
                 if (importData.favicons) {
-                    // 清除现有的favicon缓存
-                    Object.keys(localStorage).forEach(key => {
-                        if (key.startsWith('favicon_')) {
-                            localStorage.removeItem(key);
-                        }
+                    // 收集所有favicon键
+                    const faviconKeys = [];
+                    await new Promise(resolve => {
+                        chrome.storage.local.get(null, (items) => {
+                            Object.keys(items).forEach(key => {
+                                if (key.startsWith('favicon_')) {
+                                    faviconKeys.push(key);
+                                }
+                            });
+                            resolve();
+                        });
                     });
                     
+                    // 清除现有的favicon缓存
+                    if (faviconKeys.length > 0) {
+                        await Storage.remove(faviconKeys);
+                    }
+                    
                     // 导入新的favicon缓存
-                    Object.keys(importData.favicons).forEach(key => {
-                        localStorage.setItem(key, importData.favicons[key]);
-                    });
+                    await Storage.set(importData.favicons);
                 }
                 
                 // 更新UI
-                document.documentElement.style.setProperty('--col-count', localStorage.getItem('gridCols') || 5);
-                document.documentElement.style.setProperty('--item-size', `${localStorage.getItem('gridSize') || 110}px`);
-                document.documentElement.style.setProperty('--scale', (localStorage.getItem('scale') || 100) / 100);
-                colInput.value = localStorage.getItem('gridCols') || 5;
-                colValDisplay.innerText = localStorage.getItem('gridCols') || 5;
-                sizeInput.value = localStorage.getItem('gridSize') || 110;
-                scaleInput.value = localStorage.getItem('scale') || 100;
-                scaleValDisplay.innerText = (localStorage.getItem('scale') || 100) + '%';
+                const gridCols = await Storage.get('gridCols', 5);
+                const gridSize = await Storage.get('gridSize', 110);
+                const scale = await Storage.get('scale', 100);
+                const colorMode = await Storage.get('colorMode', 'auto');
+                
+                document.documentElement.style.setProperty('--col-count', gridCols);
+                document.documentElement.style.setProperty('--item-size', `${gridSize}px`);
+                document.documentElement.style.setProperty('--scale', scale / 100);
+                colInput.value = gridCols;
+                colValDisplay.innerText = gridCols;
+                sizeInput.value = gridSize;
+                scaleInput.value = scale;
+                scaleValDisplay.innerText = scale + '%';
                 
                 // 更新颜色模式按钮状态
                 document.querySelectorAll('.color-mode-buttons .glass-btn').forEach(btn => {
                     btn.classList.remove('active');
                 });
-                const savedColorMode = localStorage.getItem('colorMode') || 'auto';
-                document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${savedColorMode}"]`).classList.add('active');
+                document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${colorMode}"]`).classList.add('active');
                 
                 updateEngineSelector();
                 renderEngineList();
-                renderShortcuts();
+                await renderShortcuts();
                 
                 alert('数据导入成功！');
             } catch (error) {
@@ -960,9 +1013,10 @@ document.addEventListener('DOMContentLoaded', () => {
     searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') performSearch(); });
 
     // --- 4. 快捷方式渲染 ---
-    function renderShortcuts() {
+    async function renderShortcuts() {
         grid.innerHTML = '';
-        shortcuts.forEach((item, index) => {
+        for (let index = 0; index < shortcuts.length; index++) {
+            const item = shortcuts[index];
             const div = document.createElement('div');
             div.className = 'shortcut-item glass-element';
             div.draggable = true;
@@ -973,7 +1027,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!faviconUrl) {
                 // 尝试从本地存储获取favicon
                 const hostname = new URL(getFullUrl(item.url)).hostname;
-                const savedFavicon = localStorage.getItem(`favicon_${hostname}`);
+                const savedFavicon = await Storage.get(`favicon_${hostname}`);
                 if (savedFavicon) {
                     faviconUrl = savedFavicon;
                 } else {
@@ -995,8 +1049,8 @@ document.addEventListener('DOMContentLoaded', () => {
             div.addEventListener('contextmenu', (e) => showContextMenu(e, index));
             addDragEvents(div);
             grid.appendChild(div);
-        });
-        localStorage.setItem('shortcuts', JSON.stringify(shortcuts));
+        }
+        await Storage.set('shortcuts', JSON.stringify(shortcuts));
     }
     
     // 辅助函数：确保URL有协议前缀
@@ -1012,7 +1066,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // 首先检查是否有本地缓存（使用与renderShortcuts中相同的键）
         const hostname = new URL(getFullUrl(websiteUrl)).hostname;
         const cacheKey = `favicon_${hostname}`;
-        const savedFavicon = localStorage.getItem(cacheKey);
+        const savedFavicon = await Storage.get(cacheKey);
         if (savedFavicon) {
             // 如果有缓存，直接使用，不尝试网络请求
             if (element && element.querySelector) {
@@ -1062,22 +1116,27 @@ document.addEventListener('DOMContentLoaded', () => {
                     // 检查是否是有效的图标数据
                     if (dataUrl && dataUrl.length > 0) {
                         try {
-                            localStorage.setItem(cacheKey, dataUrl);
+                            await Storage.set(cacheKey, dataUrl);
                         } catch (storageError) {
                             console.warn('无法缓存favicon，可能是因为存储空间不足');
                             
                             // 如果是存储空间不足，尝试清理旧的favicon缓存
                             if (storageError.name === 'QuotaExceededError') {
                                 try {
-                                    // 清理所有favicon缓存
-                                    Object.keys(localStorage).forEach(key => {
-                                        if (key.startsWith('favicon_')) {
-                                            localStorage.removeItem(key);
-                                        }
+                                    // 收集所有favicon键
+                                    const faviconKeys = [];
+                                    chrome.storage.local.get(null, (items) => {
+                                        Object.keys(items).forEach(key => {
+                                            if (key.startsWith('favicon_')) {
+                                                faviconKeys.push(key);
+                                            }
+                                        });
+                                        // 清理所有favicon缓存
+                                        chrome.storage.local.remove(faviconKeys);
                                     });
                                     
                                     // 重新尝试存储
-                                    localStorage.setItem(cacheKey, dataUrl);
+                                    await Storage.set(cacheKey, dataUrl);
                                 } catch (retryError) {
                                     console.error('清理缓存后仍无法存储favicon:', retryError);
                                 }
@@ -1120,13 +1179,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // 当用户编辑快捷方式URL时，清除旧的favicon缓存并获取新的favicon
-    function updateShortcutFavicon(index, newUrl) {
+    async function updateShortcutFavicon(index, newUrl) {
         // 获取旧的URL来删除对应的favicon缓存
         const oldUrl = shortcuts[index].url;
         const oldHostname = new URL(getFullUrl(oldUrl)).hostname;
         
         // 清除旧的favicon缓存
-        localStorage.removeItem(`favicon_${oldHostname}`);
+        await Storage.remove(`favicon_${oldHostname}`);
         
         // 重新渲染快捷方式以获取新favicon
         setTimeout(() => {
@@ -1138,7 +1197,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // 页面加载完成后渲染快捷方式
-    renderShortcuts();
+    await renderShortcuts();
     
     // 初始化右键菜单颜色模式
     // 不再需要单独调用，因为在updateTextColorClasses中已经处理
@@ -1264,7 +1323,7 @@ document.addEventListener('DOMContentLoaded', () => {
             e.stopPropagation();
         });
         
-        item.addEventListener('dragend', () => {
+        item.addEventListener('dragend', async () => {
             // 拖拽结束后，根据DOM顺序重建数据
             const shortcutItems = grid.querySelectorAll('.shortcut-item');
             const newShortcuts = [];
@@ -1280,7 +1339,7 @@ document.addEventListener('DOMContentLoaded', () => {
             shortcuts = newShortcuts;
             
             // 保存到localStorage
-            localStorage.setItem('shortcuts', JSON.stringify(shortcuts));
+            await Storage.set('shortcuts', JSON.stringify(shortcuts));
             
             // 清理样式
             if (currentDragElement) {
@@ -1394,7 +1453,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // 应用存储的主题
-    function applyStoredTheme(theme) {
+    async function applyStoredTheme(theme) {
         const body = document.body;
         body.classList.remove('light-bg');
         
@@ -1402,14 +1461,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // 不再添加light-bg类，避免影响页面元素
         
         // 更新文本颜色类
-        updateTextColorClasses(theme);
+        await updateTextColorClasses(theme);
         
         // 更新对话框颜色模式
-        updateDialogColorMode(theme);
+        await updateDialogColorMode(theme);
     }
     
     // 应用颜色模式
-    function applyColorMode(mode) {
+    async function applyColorMode(mode) {
         // 移除所有颜色模式类
         const body = document.body;
         body.classList.remove('light-bg');
@@ -1428,16 +1487,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 恢复自动检测并获取当前主题
                 detectBackgroundColor();
                 // 从存储中获取检测到的主题
-                const themeInfo = localStorage.getItem('backgroundThemeInfo');
+                const themeInfo = await Storage.get('backgroundThemeInfo');
                 currentTheme = themeInfo ? JSON.parse(themeInfo).theme : 'dark';
                 break;
         }
         
         // 只更新快捷方式和搜索框的颜色类
-        updateTextColorClasses(currentTheme);
+        await updateTextColorClasses(currentTheme);
         
         // 更新对话框的颜色模式
-        updateDialogColorMode(currentTheme);
+        await updateDialogColorMode(currentTheme);
     }
     
     // 修复背景亮度检测函数
@@ -1516,10 +1575,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     bgUrl: bgUrl,
                     systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
                 };
-                localStorage.setItem('backgroundThemeInfo', JSON.stringify(themeInfo));
                 
-                // 更新快捷方式和搜索框的颜色类
-                updateTextColorClasses(theme);
+                // 异步存储主题信息和更新颜色类
+                (async function() {
+                    await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
+                    await updateTextColorClasses(theme);
+                })();
             };
             img.src = urlMatch[1];
         } else {
@@ -1544,16 +1605,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     bgUrl: bgUrl,
                     systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
                 };
-                localStorage.setItem('backgroundThemeInfo', JSON.stringify(themeInfo));
                 
-                // 更新快捷方式和搜索框的颜色类
-                updateTextColorClasses(theme);
+                // 异步存储主题信息和更新颜色类
+                (async function() {
+                    await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
+                    await updateTextColorClasses(theme);
+                })();
             }
         }
     }
     
     // 更新文本颜色类
-    function updateTextColorClasses(mode) {
+    async function updateTextColorClasses(mode) {
         const searchCapsule = document.querySelector('.search-capsule');
         const shortcutsContainer = document.querySelector('.grid-container');
         const addBtn = document.querySelector('.add-btn');
@@ -1577,7 +1640,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         if (mode === 'auto') {
             // 自动模式，从存储中获取主题
-            const themeInfo = localStorage.getItem('backgroundThemeInfo');
+            const themeInfo = await Storage.get('backgroundThemeInfo');
             if (themeInfo) {
                 const parsedTheme = JSON.parse(themeInfo);
                 textColorClass = parsedTheme.theme === 'light' ? 'text-color-dark' : 'text-color-light';
@@ -1620,22 +1683,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // 确保在 DOM 加载完成后立即更新颜色类
-    setTimeout(() => {
-        const savedColorMode = localStorage.getItem('colorMode') || 'auto';
+    setTimeout(async () => {
+        const savedColorMode = await Storage.get('colorMode', 'auto');
         let currentTheme;
-        
+                
         if (savedColorMode === 'auto') {
-            const themeInfo = localStorage.getItem('backgroundThemeInfo');
-            currentTheme = themeInfo ? JSON.parse(themeInfo).theme : 'dark';
+            // 对于自动模式，尝试从存储中获取主题信息
+            const themeInfo = await Storage.get('backgroundThemeInfo');
+            if (themeInfo) {
+                // 如果有预先计算的主题信息，使用它
+                currentTheme = JSON.parse(themeInfo).theme;
+            } else {
+                // 如果没有预先计算的主题信息，触发背景颜色检测
+                detectBackgroundColor();
+                // 默认使用深色主题，直到检测完成
+                currentTheme = 'dark';
+            }
         } else {
+            // 对于固定模式，直接使用保存的颜色模式
             currentTheme = savedColorMode;
         }
+                
+        await updateTextColorClasses(currentTheme);
         
-        updateTextColorClasses(currentTheme);
-    }, 0);
+        // 确保在首次加载时也正确应用对话框颜色模式
+        await updateDialogColorMode(currentTheme);
+    }, 100);
     
     // 更新对话框颜色模式
-    function updateDialogColorMode(mode) {
+    async function updateDialogColorMode(mode) {
         const dialogs = document.querySelectorAll('.glass-dialog');
         
         // 移除所有颜色模式类
@@ -1658,7 +1734,7 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'auto':
             default:
                 // 自动模式，从存储中获取主题
-                const themeInfo = localStorage.getItem('backgroundThemeInfo');
+                const themeInfo = await Storage.get('backgroundThemeInfo');
                 if (themeInfo) {
                     const parsedTheme = JSON.parse(themeInfo);
                     if (parsedTheme.theme === 'light') {
