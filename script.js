@@ -5,25 +5,120 @@ function showError(message, error = null) {
 }
 
 // --- chrome.storage.local 兼容 localStorage 层 ---
-const Storage = {
-    get(key, defaultVal = null) {
-        return new Promise(resolve => {
-            chrome.storage.local.get([key], res => {
-                resolve(res[key] ?? defaultVal);
+const Storage = (function() {
+    // 写入批处理和节流相关变量
+    let pendingWrites = {};
+    let writeTimeout = null;
+    const WRITE_DELAY = 500; // 500ms 节流延迟
+
+    // 执行实际写入操作
+    function flushWrites() {
+        if (Object.keys(pendingWrites).length > 0) {
+            chrome.storage.local.set(pendingWrites, () => {
+                if (chrome.runtime.lastError) {
+                    console.error('Storage write error:', chrome.runtime.lastError);
+                }
             });
-        });
-    },
-    set(key, value) {
-        return new Promise(resolve => {
-            chrome.storage.local.set({ [key]: value }, resolve);
-        });
-    },
-    remove(key) {
-        return new Promise(resolve => {
-            chrome.storage.local.remove(key, resolve);
-        });
+            pendingWrites = {};
+        }
+        writeTimeout = null;
     }
-};
+
+    // 添加写入操作到批处理队列
+    function scheduleWrite(key, value) {
+        pendingWrites[key] = value;
+        
+        // 清除之前的定时器
+        if (writeTimeout) {
+            clearTimeout(writeTimeout);
+        }
+        
+        // 设置新的定时器
+        writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
+    }
+
+    return {
+        get(key, defaultVal = null) {
+            return new Promise(resolve => {
+                chrome.storage.local.get([key], res => {
+                    resolve(res[key] ?? defaultVal);
+                });
+            });
+        },
+        
+        set(key, value) {
+            // 添加到批处理队列而不是立即执行
+            scheduleWrite(key, value);
+            
+            // 返回 Promise 以保持接口一致性
+            return Promise.resolve();
+        },
+        
+        // 批量写入方法
+        setBatch(items) {
+            Object.assign(pendingWrites, items);
+            
+            // 清除之前的定时器
+            if (writeTimeout) {
+                clearTimeout(writeTimeout);
+            }
+            
+            // 设置新的定时器
+            writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
+            
+            return Promise.resolve();
+        },
+        
+        // 立即写入方法（用于页面卸载等场景）
+        setImmediate(key, value) {
+            return new Promise(resolve => {
+                // 如果有待处理的写入，先刷新它们
+                if (writeTimeout) {
+                    clearTimeout(writeTimeout);
+                    flushWrites();
+                }
+                
+                // 执行立即写入
+                chrome.storage.local.set({ [key]: value }, () => {
+                    if (chrome.runtime.lastError) {
+                        console.error('Storage write error:', chrome.runtime.lastError);
+                    }
+                    resolve();
+                });
+            });
+        },
+        
+        remove(key) {
+            return new Promise(resolve => {
+                // 从待处理写入中移除
+                if (pendingWrites.hasOwnProperty(key)) {
+                    delete pendingWrites[key];
+                }
+                
+                chrome.storage.local.remove(key, () => {
+                    if (chrome.runtime.lastError) {
+                        console.error('Storage remove error:', chrome.runtime.lastError);
+                    }
+                    resolve();
+                });
+            });
+        },
+        
+        // 立即刷新所有待处理的写入
+        flush() {
+            if (writeTimeout) {
+                clearTimeout(writeTimeout);
+                flushWrites();
+            }
+            return Promise.resolve();
+        }
+    };
+})();
+
+// 在页面即将卸载时，确保所有待处理的写入都被执行
+window.addEventListener('beforeunload', () => {
+    Storage.flush();
+});
 
 // 在页面加载早期获取并应用自定义背景，避免闪烁
 (async function() {
@@ -409,7 +504,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 预加载图片以减少闪烁
             const img = new Image();
             img.onload = async function() {
-                await Storage.set('customBg', compressedImage);
+                await Storage.setImmediate('customBg', compressedImage);
                 await applyBackground(compressedImage);
             };
             img.src = compressedImage;
@@ -443,7 +538,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 预加载图片以减少闪烁
                 const img = new Image();
                 img.onload = async function() {
-                    await Storage.set('customBg', compressedImage);
+                    await Storage.setImmediate('customBg', compressedImage);
                     await applyBackground(compressedImage);
                 };
                 img.src = compressedImage;
@@ -515,25 +610,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 导入数据
                 if (importData.shortcuts) {
                     shortcuts = importData.shortcuts;
-                    await Storage.set('shortcuts', JSON.stringify(shortcuts));
+                    await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
                 }
                 
                 if (importData.gridCols) {
-                    await Storage.set('gridCols', importData.gridCols);
+                    await Storage.setImmediate('gridCols', importData.gridCols);
                 }
                 
                 if (importData.gridSize) {
-                    await Storage.set('gridSize', importData.gridSize);
+                    await Storage.setImmediate('gridSize', importData.gridSize);
                 }
                 
                 // 导入显示比例设置
                 if (importData.scale !== undefined) {
-                    await Storage.set('scale', importData.scale);
+                    await Storage.setImmediate('scale', importData.scale);
                 }
                 
                 if (importData.customBg !== undefined) {
                     if (importData.customBg) {
-                        await Storage.set('customBg', importData.customBg);
+                        await Storage.setImmediate('customBg', importData.customBg);
                     } else {
                         await Storage.remove('customBg');
                     }
@@ -543,7 +638,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 // 导入颜色模式设置
                 if (importData.colorMode !== undefined) {
-                    await Storage.set('colorMode', importData.colorMode);
+                    await Storage.setImmediate('colorMode', importData.colorMode);
                 }
                 
                 // 导入favicon缓存
@@ -567,7 +662,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }
                     
                     // 导入新的favicon缓存
-                    await Storage.set(importData.favicons);
+                    await Storage.setBatch(importData.favicons);
                 }
                 
                 // 更新UI
@@ -732,7 +827,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     // 检查是否是有效的图标数据
                     if (dataUrl && dataUrl.length > 0) {
                         try {
-                            await Storage.set(cacheKey, dataUrl);
+                            await Storage.set(`favicon_${hostname}`, dataUrl);
                         } catch (storageError) {
                             console.warn('无法缓存favicon，可能是因为存储空间不足');
                             
@@ -752,13 +847,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     });
                                     
                                     // 重新尝试存储
-                                    await Storage.set(cacheKey, dataUrl);
+                                    await Storage.set(`favicon_${hostname}`, dataUrl);
                                 } catch (retryError) {
                                     console.error('清理缓存后仍无法存储favicon:', retryError);
                                 }
                             }
                         }
-                        
+
                         // 更新页面上的图标
                         if (element && element.querySelector) {
                             const img = element.querySelector('img');
