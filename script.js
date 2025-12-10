@@ -718,12 +718,36 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 4. 快捷方式渲染 ---
     async function renderShortcuts() {
-        grid.innerHTML = '';
+        // 创建DocumentFragment以批量更新DOM
+        const fragment = document.createDocumentFragment();
+        
+        // 获取当前所有子元素
+        const currentElements = Array.from(grid.children);
+        
         for (let index = 0; index < shortcuts.length; index++) {
             const item = shortcuts[index];
-            const div = document.createElement('div');
-            div.className = 'shortcut-item glass-element';
-            div.draggable = true;
+            
+            // 尝试从现有元素中获取
+            let div;
+            if (index < currentElements.length) {
+                div = currentElements[index];
+            } else if (elementPool.length > 0) {
+                // 从元素池中获取元素
+                div = elementPool.pop();
+            } else {
+                // 创建新元素
+                div = document.createElement('div');
+                div.className = 'shortcut-item glass-element';
+                div.draggable = true;
+                
+                // 添加固定的子元素
+                const img = document.createElement('img');
+                const span = document.createElement('span');
+                div.appendChild(img);
+                div.appendChild(span);
+            }
+            
+            // 更新元素属性和内容
             div.dataset.index = index;
             
             // 使用自定义图标或获取网站favicon
@@ -742,12 +766,44 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
             
-            div.innerHTML = `<img src="${faviconUrl}" alt="${item.name}"><span title="${item.name}">${item.name}</span>`;
-            div.addEventListener('click', (e) => { if(!e.defaultPrevented) window.location.href = item.url; });
-            div.addEventListener('contextmenu', (e) => showContextMenu(e, index));
-            addDragEvents(div);
-            grid.appendChild(div);
+            // 更新子元素内容
+            const img = div.querySelector('img');
+            const span = div.querySelector('span');
+            img.src = faviconUrl;
+            img.alt = item.name;
+            span.textContent = item.name;
+            span.title = item.name;
+            
+            // 清除可能存在的旧状态
+            div.classList.remove('dragging');
+            div.style.opacity = '';
+            
+            // 移除所有现有的事件监听器（通过克隆节点）
+            const cleanDiv = div.cloneNode(true);
+            cleanDiv.dataset.index = index;
+            cleanDiv.className = div.className;
+            cleanDiv.draggable = div.draggable;
+            
+            // 添加事件监听器
+            cleanDiv.addEventListener('click', (e) => { 
+                if(!e.defaultPrevented) window.location.href = item.url; 
+            });
+            cleanDiv.addEventListener('contextmenu', (e) => showContextMenu(e, index));
+            addDragEvents(cleanDiv);
+            
+            // 将元素添加到片段中
+            fragment.appendChild(cleanDiv);
         }
+        
+        // 将多余的元素放入元素池
+        for (let i = shortcuts.length; i < currentElements.length; i++) {
+            elementPool.push(currentElements[i]);
+        }
+        
+        // 批量更新DOM
+        grid.innerHTML = '';
+        grid.appendChild(fragment);
+        
         await Storage.set('shortcuts', JSON.stringify(shortcuts));
     }
     
@@ -1499,3 +1555,5 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     initDragAndDrop();
 });
+// 元素池，用于复用DOM元素
+const elementPool = [];
