@@ -1,3 +1,9 @@
+// 统一错误显示函数
+function showError(message, error = null) {
+    console.error(message, error);
+    alert(message);
+}
+
 // --- chrome.storage.local 兼容 localStorage 层 ---
 const Storage = {
     get(key, defaultVal = null) {
@@ -408,7 +414,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             };
             img.src = compressedImage;
         } catch (error) {
-            alert('获取图片失败，请重试');
+            showError('获取图片失败，请重试');
             console.error(error);
         } finally {
             bgUnsplashBtn.innerHTML = originalText;
@@ -423,7 +429,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // 限制文件大小 (例如 2MB)，防止 localStorage 爆满卡顿
         if (file.size > 5 * 1024 * 1024) {
-            alert('图片太大啦，请选择 5MB 以内的图片');
+            showError('图片太大啦，请选择 5MB 以内的图片');
             return;
         }
 
@@ -442,7 +448,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 };
                 img.src = compressedImage;
             } catch (e) {
-                alert('存储失败，可能是图片转换后太大了');
+                showError('存储失败，可能是图片转换后太大了', e);
             }
         };
         reader.readAsDataURL(file);
@@ -587,10 +593,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 await renderShortcuts();
                 
-                alert('数据导入成功！');
+                showError('数据导入成功！');
             } catch (error) {
-                console.error('导入数据时出错:', error);
-                alert('导入数据失败，请确保选择了有效的JSON文件。');
+                showError('导入数据失败，请确保选择了有效的JSON文件。', error);
             }
         };
         reader.readAsText(file);
@@ -1018,13 +1023,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // 检查文件类型
         if (!file.type.match('image.*')) {
-            alert('请选择图片文件');
+            showError('请选择图片文件');
             return;
         }
         
         // 限制文件大小 (例如 500KB)
         if (file.size > 500 * 1024) {
-            alert('图片太大啦，请选择 500KB 以内的图片');
+            showError('图片太大啦，请选择 500KB 以内的图片');
             return;
         }
         
