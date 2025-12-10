@@ -82,9 +82,24 @@
         <h3 class="dialog-title">编辑快捷方式</h3>
         <input type="text" id="shortcut-name" placeholder="名称" class="glass-input">
         <input type="text" id="shortcut-url" placeholder="网址" class="glass-input">
-        <div class="icon-input-container">
-            <input type="text" id="shortcut-icon" placeholder="图标 URL (可选)" class="glass-input">
-            <label for="shortcut-icon-upload" class="glass-btn">上传图标</label>
+        <input type="text" id="shortcut-icon" placeholder="图标 URL (可选)" class="glass-input">
+        <div class="icon-button-container">
+            <button id="refresh-icon-btn" class="glass-btn">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 4v6h-6"/>
+                    <path d="M1 20v-6h6"/>
+                    <path d="M3.5 17.5c1.5 2.5 4.2 4.5 7.5 4.5s6-2 7.5-4.5c1.5-2.5 1.5-5.5 0-8C17 7.5 14.3 5.5 11 5.5S5 7.5 3.5 10c-1.5 2.5-1.5 5.5 0 8z"/>
+                </svg>
+                <span>重新获取图标</span>
+            </button>
+            <label for="shortcut-icon-upload" class="glass-btn">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <span>上传图标</span>
+            </label>
             <input type="file" id="shortcut-icon-upload" accept="image/*" hidden>
         </div>
         <div class="dialog-actions">

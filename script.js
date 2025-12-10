@@ -197,6 +197,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const urlInput = document.getElementById('shortcut-url');
     const iconInput = document.getElementById('shortcut-icon'); // 新增图标输入框
     const iconUploadInput = document.getElementById('shortcut-icon-upload'); // 图标上传输入框
+    const refreshIconBtn = document.getElementById('refresh-icon-btn'); // 重新获取图标按钮
     const saveBtn = document.getElementById('save-btn');
     const cancelBtn = document.getElementById('cancel-btn');
     let isEditing = false, editIndex = -1;
@@ -222,7 +223,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 加载并应用布局设置
     const savedCols = await Storage.get('gridCols', 5);
-    const savedSize = await Storage.get('gridSize', 110);
+    const savedSize = await Storage.get('gridSize', 100);
     const savedScale = await Storage.get('scale', 100);
     document.documentElement.style.setProperty('--col-count', savedCols);
     document.documentElement.style.setProperty('--item-size', `${savedSize}px`);
@@ -409,9 +410,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 await Storage.set('shortcuts', JSON.stringify(shortcuts));
                 await renderShortcuts();
                 
-                // 如果URL改变了，更新favicon
+                // 如果URL改变了，重新渲染快捷方式以更新favicon
                 if (urlChanged) {
-                    await updateShortcutFavicon(editIndex, finalUrl);
+                    await renderShortcuts();
                 }
             } else {
                 const newItem = { name, url: finalUrl };
@@ -751,19 +752,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             div.dataset.index = index;
             
             // 使用自定义图标或获取网站favicon
-            let faviconUrl = item.icon;
+            let faviconUrl = item.icon; 
+            
             if (!faviconUrl) {
-                const hostname = getStandardHostname(item.url);
-                const savedFavicon = await Storage.get(`favicon_${hostname}`);
-                if (savedFavicon && savedFavicon.length > 0) {
-                    faviconUrl = savedFavicon;
-                } else if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
-                    // 仅当没有缓存时才获取新的favicon
-                    getFaviconAndCache(item.url, div);
-                    faviconUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`;
-                } else {
-                    faviconUrl = `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`;
-                }
+                // 使用 Chrome 原生 Favicon API
+                const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
+                urlObj.searchParams.set("pageUrl", item.url); 
+                urlObj.searchParams.set("size", "256");
+                faviconUrl = urlObj.toString();
             }
             
             // 更新子元素内容
@@ -828,173 +824,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // 获取网站favicon并缓存到localStorage
-    async function getFaviconAndCache(websiteUrl, element) {
-        // 首先检查是否有本地缓存（使用与renderShortcuts中相同的键）
-        const hostname = getStandardHostname(websiteUrl);
-        const cacheKey = `favicon_${hostname}`;
-        const savedFavicon = await Storage.get(cacheKey);
-        if (savedFavicon && savedFavicon.length > 0) {
-            // 如果有缓存且非空，直接使用，不尝试网络请求
-            if (element && element.querySelector) {
-                const img = element.querySelector('img');
-                if (img) {
-                    img.src = savedFavicon;
-                }
-            }
-            return;
-        }
-        
-        // 检查是否可以使用background script
-        if (!(chrome && chrome.runtime && chrome.runtime.sendMessage)) {
-            console.log('Background script不可用，跳过favicon获取');
-            return;
-        }
-        
-        const fullUrl = getFullUrl(websiteUrl);
-        const hostnameFavicon = getStandardHostname(websiteUrl);
-        
-        try {
-            // 按优先级尝试不同的favicon源
-            const faviconUrls = [
-                `${fullUrl}/favicon.png`,
-                `${fullUrl}/favicon.ico`,
-                `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`,
-                `https://icon.horse/icon/${hostname}`,
-            ];
-            
-            // 逐个尝试favicon源
-            let success = false;
-            for (let i = 0; i < faviconUrls.length; i++) {
-                try {
-                    let dataUrl;
-                    
-                    // 使用background script获取favicon
-                    const response = await chrome.runtime.sendMessage({
-                        action: "fetchFavicon",
-                        url: faviconUrls[i]
-                    });
-                    
-                    if (response.success) {
-                        dataUrl = response.dataUrl;
-                    } else {
-                        throw new Error(response.error || "Unknown error");
-                    }
-                    
-                    // 检查是否是有效的图标数据
-                    if (dataUrl && dataUrl.length > 0) {
-                        try {
-                            await Storage.set(`favicon_${hostname}`, dataUrl);
-                        } catch (storageError) {
-                            console.warn('无法缓存favicon，可能是因为存储空间不足');
-                            
-                            // 如果是存储空间不足，尝试清理旧的favicon缓存
-                            if (storageError.name === 'QuotaExceededError') {
-                                try {
-                                    // 收集所有favicon键
-                                    const faviconKeys = [];
-                                    chrome.storage.local.get(null, (items) => {
-                                        Object.keys(items).forEach(key => {
-                                            if (key.startsWith('favicon_')) {
-                                                faviconKeys.push(key);
-                                            }
-                                        });
-                                        // 清理所有favicon缓存
-                                        chrome.storage.local.remove(faviconKeys);
-                                    });
-                                    
-                                    // 重新尝试存储
-                                    await Storage.set(`favicon_${hostname}`, dataUrl);
-                                } catch (retryError) {
-                                    console.error('清理缓存后仍无法存储favicon:', retryError);
-                                }
-                            }
-                        }
 
-                        // 更新页面上的图标
-                        if (element && element.querySelector) {
-                            const img = element.querySelector('img');
-                            if (img) {
-                                img.src = dataUrl;
-                            }
-                        }
-                        
-                        success = true;
-                        break;
-                    }
-                } catch (error) {
-                    // 忽略单个请求的错误，继续尝试下一个源
-                    console.warn(`无法从 ${faviconUrls[i]} 获取favicon:`, error.message);
-                }
-            }
-            
-            if (!success) {
-                console.warn(`无法获取 ${websiteUrl} 的favicon`);
-            }
-        } catch (error) {
-            console.error('获取favicon时出错:', error);
-        }
-    }
-    
-    // 将Blob转换为Data URL
-    function blobToDataUrl(blob) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
-    }
-    
-    // 定期清理旧的favicon缓存，避免存储空间不足
-    async function cleanupOldFavicons() {
-        try {
-            // 获取所有favicon键
-            const faviconKeys = [];
-            await new Promise(resolve => {
-                chrome.storage.local.get(null, (items) => {
-                    Object.keys(items).forEach(key => {
-                        if (key.startsWith('favicon_')) {
-                            faviconKeys.push(key);
-                        }
-                    });
-                    resolve();
-                });
-            });
-            
-            // 如果favicon数量超过100个，清理最旧的一半
-            if (faviconKeys.length > 100) {
-                const keysToRemove = faviconKeys.slice(0, Math.floor(faviconKeys.length / 2));
-                await Storage.remove(keysToRemove);
-                console.log(`清除了 ${keysToRemove.length} 个旧的favicon缓存`);
-            }
-        } catch (error) {
-            console.error('清理旧favicon时出错:', error);
-        }
-    }
-    
-    // 当用户编辑快捷方式URL时，清除旧的favicon缓存并获取新的favicon
-    async function updateShortcutFavicon(index, newUrl) {
-        // 获取旧的URL来删除对应的favicon缓存
-        const oldUrl = shortcuts[index].url;
-        const oldHostname = getStandardHostname(oldUrl);
-        
-        // 清除旧的favicon缓存
-        await Storage.remove(`favicon_${oldHostname}`);
-        
-        // 重新渲染快捷方式以获取新favicon
-        setTimeout(() => {
-            const shortcutElements = document.querySelectorAll('.shortcut-item');
-            if (shortcutElements[index]) {
-                getFaviconAndCache(newUrl, shortcutElements[index]);
-            }
-        }, 100);
-    }
     
     // 页面加载完成后渲染快捷方式
     await renderShortcuts();
-    
-    // 定期清理旧的favicon缓存
-    cleanupOldFavicons();
     
     // 初始化右键菜单颜色模式
     // 不再需要单独调用，因为在updateTextColorClasses中已经处理
@@ -1189,6 +1022,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             iconInput.value = event.target.result;
         };
         reader.readAsDataURL(file);
+    });
+    
+    // 重新获取图标按钮事件处理
+    refreshIconBtn.addEventListener('click', () => {
+        const url = urlInput.value.trim();
+        if (!url) {
+            showError('请输入网址后再重新获取图标');
+            return;
+        }
+        
+        // 使用 Chrome 原生 Favicon API 获取图标
+        const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
+        urlObj.searchParams.set("pageUrl", url.startsWith('http') ? url : 'https://' + url);
+        urlObj.searchParams.set("size", "128");
+        iconInput.value = urlObj.toString();
     });
     
     cancelBtn.addEventListener('click', () => editDialog.close());

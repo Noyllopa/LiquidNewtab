@@ -524,6 +524,23 @@ body {
     color: #fff;
 }
 
+/* 图标按钮容器样式 */
+.icon-button-container {
+    display: flex;
+    gap: 10px;
+    margin: 15px 0;
+}
+
+.icon-button-container .glass-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 12px;
+    min-height: 44px;
+}
+
 .glass-input:focus { 
     border-color: rgba(100,180,255,0.7);
     background: rgba(255,255,255,0.15); 
@@ -634,6 +651,29 @@ input[type="range"]::-moz-range-thumb {
     color: #333;
     border: 1px solid rgba(0,0,0,0.1);
     background: rgba(255,255,255,0.5);
+}
+
+.glass-dialog.light-bg .icon-button-container .glass-btn {
+    color: #333;
+    border: 1px solid rgba(0,0,0,0.1);
+    background: rgba(255,255,255,0.5);
+}
+
+.glass-dialog.light-bg .icon-button-container .glass-btn:hover {
+    background: rgba(0,0,0,0.1);
+    border-color: rgba(0,0,0,0.2);
+}
+
+.glass-dialog.light-bg .icon-button-container .glass-btn.primary {
+    background: rgba(0,0,0,0.2);
+    border-color: rgba(0,0,0,0.2);
+    color: #333;
+    font-weight: 600;
+}
+
+.glass-dialog.light-bg .icon-button-container .glass-btn.primary:hover {
+    background: rgba(0,0,0,0.3);
+    border-color: rgba(0,0,0,0.3);
 }
 
 .glass-dialog.light-bg .glass-btn:hover {
