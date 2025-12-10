@@ -13,7 +13,9 @@
 
 ### Chrome 商店安装（推荐）
 
-该扩展已提交至 Chrome 网上应用店，目前正在审核中，审核通过后将提供直接安装链接。
+点击下方链接直接安装：
+
+[![Chrome Web Store](https://img.shields.io/badge/Chrome-Install-green.svg)](https://chrome.google.com/webstore/detail/nfpbmpokfnpmikniaoindhbjjpkeglkl)
 
 ### 开发者模式安装
 
