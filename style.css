@@ -137,7 +137,7 @@ body {
     
     .icon-hover:hover {
         background: rgba(255, 255, 255, .9);
-        box-shadow: 0 10px 40px -10px rgba(0, 0, 0, .2);
+        box-shadow: 0 15px 35px rgba(0,0,0,0.35);
     }
     
     
@@ -174,7 +174,7 @@ body {
 .icon-hover:hover {
     transform: translateY(-2px);
     background: var(--capsule-hover);
-    box-shadow: 0 10px 40px -10px rgba(0,0,0,0.4);
+    box-shadow: 0 15px 35px rgba(0,0,0,0.35);
 }
 
 
@@ -322,6 +322,7 @@ body {
     -webkit-backdrop-filter: url(#frosted);
     position: relative;
     outline: 0;
+    will-change: transform, box-shadow;
 }
 .shortcut-item:hover {
     transform: translateY(-8px) scale(1.03) !important; /* 覆盖通用 hover */
