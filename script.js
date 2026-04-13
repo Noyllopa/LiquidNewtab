@@ -6,34 +6,32 @@ function showError(message, error = null) {
 
 // --- chrome.storage.local 兼容 localStorage 层 ---
 const Storage = (function() {
-    // 写入批处理和节流相关变量
     let pendingWrites = {};
     let writeTimeout = null;
-    const WRITE_DELAY = 500; // 500ms 节流延迟
+    let flushResolveQueue = [];
+    const WRITE_DELAY = 500;
 
-    // 执行实际写入操作
     function flushWrites() {
         if (Object.keys(pendingWrites).length > 0) {
-            chrome.storage.local.set(pendingWrites, () => {
+            const dataToWrite = { ...pendingWrites };
+            pendingWrites = {};
+            chrome.storage.local.set(dataToWrite, () => {
                 if (chrome.runtime.lastError) {
                     console.error('Storage write error:', chrome.runtime.lastError);
                 }
+                flushResolveQueue.forEach(resolve => resolve());
+                flushResolveQueue = [];
             });
-            pendingWrites = {};
+        } else {
+            flushResolveQueue.forEach(resolve => resolve());
+            flushResolveQueue = [];
         }
         writeTimeout = null;
     }
 
-    // 添加写入操作到批处理队列
     function scheduleWrite(key, value) {
         pendingWrites[key] = value;
-        
-        // 清除之前的定时器
-        if (writeTimeout) {
-            clearTimeout(writeTimeout);
-        }
-        
-        // 设置新的定时器
+        if (writeTimeout) clearTimeout(writeTimeout);
         writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
     }
 
@@ -47,38 +45,20 @@ const Storage = (function() {
         },
         
         set(key, value) {
-            // 添加到批处理队列而不是立即执行
             scheduleWrite(key, value);
-            
-            // 返回 Promise 以保持接口一致性
             return Promise.resolve();
         },
         
-        // 批量写入方法
         setBatch(items) {
             Object.assign(pendingWrites, items);
-            
-            // 清除之前的定时器
-            if (writeTimeout) {
-                clearTimeout(writeTimeout);
-            }
-            
-            // 设置新的定时器
+            if (writeTimeout) clearTimeout(writeTimeout);
             writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
-            
             return Promise.resolve();
         },
         
-        // 立即写入方法（用于页面卸载等场景）
         setImmediate(key, value) {
+            delete pendingWrites[key];
             return new Promise(resolve => {
-                // 如果有待处理的写入，先刷新它们
-                if (writeTimeout) {
-                    clearTimeout(writeTimeout);
-                    flushWrites();
-                }
-                
-                // 执行立即写入
                 chrome.storage.local.set({ [key]: value }, () => {
                     if (chrome.runtime.lastError) {
                         console.error('Storage write error:', chrome.runtime.lastError);
@@ -89,12 +69,10 @@ const Storage = (function() {
         },
         
         remove(key) {
+            if (pendingWrites.hasOwnProperty(key)) {
+                delete pendingWrites[key];
+            }
             return new Promise(resolve => {
-                // 从待处理写入中移除
-                if (pendingWrites.hasOwnProperty(key)) {
-                    delete pendingWrites[key];
-                }
-                
                 chrome.storage.local.remove(key, () => {
                     if (chrome.runtime.lastError) {
                         console.error('Storage remove error:', chrome.runtime.lastError);
@@ -104,18 +82,21 @@ const Storage = (function() {
             });
         },
         
-        // 立即刷新所有待处理的写入
         flush() {
             if (writeTimeout) {
                 clearTimeout(writeTimeout);
-                flushWrites();
+            }
+            if (Object.keys(pendingWrites).length > 0) {
+                return new Promise(resolve => {
+                    flushResolveQueue.push(resolve);
+                    flushWrites();
+                });
             }
             return Promise.resolve();
         }
     };
 })();
 
-// 在页面即将卸载时，确保所有待处理的写入都被执行
 window.addEventListener('beforeunload', () => {
     Storage.flush();
 });
@@ -157,11 +138,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const searchInput = document.getElementById('search-input');
     const searchBtn = document.getElementById('search-btn');
     
-    // 添加调试日志
-    console.log('Search button element:', searchBtn);
-    console.log('Search input element:', searchInput);
-    
-    // 设置相关元素
     const settingsBtn = document.getElementById('settings-trigger');
     const settingsDialog = document.getElementById('settings-dialog');
     const settingsClose = document.getElementById('settings-close');
@@ -183,7 +159,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const scaleValDisplay = document.getElementById('scale-val');
     
     // 颜色模式设置元素
-    const colorModeInputs = document.querySelectorAll('input[name="color-mode"]');
     const colorModeButtons = document.querySelectorAll('.color-mode-buttons .glass-btn');
 
     // 快捷方式相关元素
@@ -208,18 +183,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const menuDelete = document.getElementById('menu-delete');
     let contextMenuIndex = -1;
 
-    // 默认快捷方式数据
-    let shortcuts = JSON.parse(await Storage.get('shortcuts', JSON.stringify([
-        { name: "Google", url: "https://google.com" },
-        { name: "Bilibili", url: "https://bilibili.com" },
-        { name: "GitHub", url: "https://github.com" },
-        { name: "Unsplash", url: "https://unsplash.com" }
-    ]))) || [
+    const DEFAULT_SHORTCUTS = [
         { name: "Google", url: "https://google.com" },
         { name: "Bilibili", url: "https://bilibili.com" },
         { name: "GitHub", url: "https://github.com" },
         { name: "Unsplash", url: "https://unsplash.com" }
     ];
+    
+    let shortcuts = JSON.parse(await Storage.get('shortcuts', JSON.stringify(DEFAULT_SHORTCUTS)));
 
     // 加载并应用布局设置
     const savedCols = await Storage.get('gridCols', 5);
@@ -371,54 +342,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
-    // 移除搜索引擎选择器相关事件监听器（已删除HTML元素）
-    
-
-
-
-
-
-
-
-
     // 保存搜索引擎
     saveBtn.addEventListener('click', async () => {
         const name = nameInput.value.trim();
         const url = urlInput.value.trim();
-        const icon = iconInput.value.trim(); // 获取图标URL
+        const icon = iconInput.value.trim();
 
         if (name && url) {
-            // 添加/编辑快捷方式
             let finalUrl = url;
             if (!url.startsWith('http')) finalUrl = 'https://' + url;
             if (isEditing) {
-                // 检查是否在编辑搜索引擎（这部分逻辑已移除）
-                // 检查URL是否发生变化
-                const oldUrl = shortcuts[editIndex].url;
-                const urlChanged = oldUrl !== finalUrl;
-                
-                // 编辑快捷方式
                 shortcuts[editIndex] = { name, url: finalUrl };
-                // 如果提供了图标（包括空字符串），则设置图标属性
-                if (icon !== undefined && icon !== null) {
-                    shortcuts[editIndex].icon = icon || undefined;
-                } else if (shortcuts[editIndex].icon) {
-                    // 如果原来有图标但没有提供新图标，则保留原图标
-                    // 这种情况理论上不会发生，因为input会保留原值
+                if (icon) {
+                    shortcuts[editIndex].icon = icon;
+                } else {
+                    delete shortcuts[editIndex].icon;
                 }
-                // 保存到localStorage
                 await Storage.set('shortcuts', JSON.stringify(shortcuts));
                 await renderShortcuts();
-                
-                // 如果URL改变了，重新渲染快捷方式以更新favicon
-                if (urlChanged) {
-                    await renderShortcuts();
-                }
             } else {
                 const newItem = { name, url: finalUrl };
-                if (icon) newItem.icon = icon; // 只有当图标URL存在且非空时才添加
+                if (icon) newItem.icon = icon;
                 shortcuts.push(newItem);
-                // 保存到localStorage
                 await Storage.set('shortcuts', JSON.stringify(shortcuts));
                 await renderShortcuts(); 
             }
@@ -430,13 +375,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
     cancelBtn.addEventListener('click', () => editDialog.close());
-    // engineCancelBtn.addEventListener('click', () => engineDialog.close()); // 已删除相关HTML元素
-
-
-    
-
-    
-
 
     // 图片压缩函数
     function compressImage(src, quality = 0.7) {
@@ -444,16 +382,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             const img = new Image();
             img.crossOrigin = 'Anonymous';
             img.onload = function() {
-                // 创建canvas元素
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 
-                // 设置canvas尺寸为原始图片尺寸，但限制最大尺寸
                 const maxWidth = 1920;
                 const maxHeight = 1080;
                 let { width, height } = img;
                 
-                // 按比例缩放
                 if (width > maxWidth) {
                     height *= maxWidth / width;
                     width = maxWidth;
@@ -467,19 +402,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 canvas.width = width;
                 canvas.height = height;
                 
-                // 在canvas上绘制图片
-                ctx.drawImage(img, 0, 0, width, height);
-                
-                // 转换为Base64格式
                 try {
+                    ctx.drawImage(img, 0, 0, width, height);
                     const dataURL = canvas.toDataURL('image/jpeg', quality);
                     resolve(dataURL);
                 } catch (e) {
-                    reject(e);
+                    reject(new Error('图片压缩失败（可能受 CORS 限制）: ' + e.message));
                 }
             };
             img.onerror = function(err) {
-                reject(err);
+                reject(new Error('图片加载失败'));
             };
             img.src = src;
         });
@@ -523,9 +455,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const file = e.target.files[0];
         if (!file) return;
         
-        // 限制文件大小 (例如 2MB)，防止 localStorage 爆满卡顿
         if (file.size > 5 * 1024 * 1024) {
             showError('图片太大啦，请选择 5MB 以内的图片');
+            bgUploadInput.value = '';
             return;
         }
 
@@ -533,10 +465,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         reader.onload = async function(event) {
             const base64String = event.target.result;
             try {
-                // 压缩图片
                 const compressedImage = await compressImage(base64String, 0.7);
                 
-                // 预加载图片以减少闪烁
                 const img = new Image();
                 img.onload = async function() {
                     await Storage.setImmediate('customBg', compressedImage);
@@ -548,6 +478,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         };
         reader.readAsDataURL(file);
+        bgUploadInput.value = '';
     });
 
     // [背景功能 3] 重置背景
@@ -710,121 +641,62 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-    // 添加调试日志
-    console.log('Adding event listeners to search button');
     searchBtn.addEventListener('click', performSearch);
     searchInput.addEventListener('keypress', (e) => { 
         if (e.key === 'Enter') performSearch(); 
     });
 
     // --- 4. 快捷方式渲染 ---
+    let shortcutsAbortController = new AbortController();
+
     async function renderShortcuts() {
-        // 创建DocumentFragment以批量更新DOM
-        const fragment = document.createDocumentFragment();
+        shortcutsAbortController.abort();
+        shortcutsAbortController = new AbortController();
+        const signal = shortcutsAbortController.signal;
         
-        // 获取当前所有子元素
-        const currentElements = Array.from(grid.children);
+        const fragment = document.createDocumentFragment();
         
         for (let index = 0; index < shortcuts.length; index++) {
             const item = shortcuts[index];
             
-            // 尝试从现有元素中获取
-            let div;
-            if (index < currentElements.length) {
-                div = currentElements[index];
-            } else if (elementPool.length > 0) {
-                // 从元素池中获取元素
-                div = elementPool.pop();
-            } else {
-                // 创建新元素
-                div = document.createElement('div');
-                div.className = 'shortcut-item glass-element';
-                div.draggable = true;
-                
-                // 添加固定的子元素
-                const img = document.createElement('img');
-                const span = document.createElement('span');
-                div.appendChild(img);
-                div.appendChild(span);
-            }
-            
-            // 更新元素属性和内容
+            const div = document.createElement('div');
+            div.className = 'shortcut-item glass-element';
+            div.draggable = true;
             div.dataset.index = index;
             
-            // 使用自定义图标或获取网站favicon
+            const img = document.createElement('img');
+            const span = document.createElement('span');
+            div.appendChild(img);
+            div.appendChild(span);
+            
             let faviconUrl = item.icon; 
             
             if (!faviconUrl) {
-                // 使用 Chrome 原生 Favicon API
                 const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
                 urlObj.searchParams.set("pageUrl", item.url); 
                 urlObj.searchParams.set("size", "256");
                 faviconUrl = urlObj.toString();
             }
             
-            // 更新子元素内容
-            const img = div.querySelector('img');
-            const span = div.querySelector('span');
             img.src = faviconUrl;
             img.alt = item.name;
             span.textContent = item.name;
             span.title = item.name;
             
-            // 清除可能存在的旧状态
-            div.classList.remove('dragging');
-            div.style.opacity = '';
+            div.addEventListener('click', () => { 
+                window.location.href = item.url; 
+            }, { signal });
+            div.addEventListener('contextmenu', (e) => showContextMenu(e, index), { signal });
+            addDragEvents(div, signal);
             
-            // 移除所有现有的事件监听器（通过克隆节点）
-            const cleanDiv = div.cloneNode(true);
-            cleanDiv.dataset.index = index;
-            cleanDiv.className = div.className;
-            cleanDiv.draggable = div.draggable;
-            
-            // 添加事件监听器
-            cleanDiv.addEventListener('click', (e) => { 
-                if(!e.defaultPrevented) window.location.href = item.url; 
-            });
-            cleanDiv.addEventListener('contextmenu', (e) => showContextMenu(e, index));
-            addDragEvents(cleanDiv);
-            
-            // 将元素添加到片段中
-            fragment.appendChild(cleanDiv);
+            fragment.appendChild(div);
         }
         
-        // 将多余的元素放入元素池
-        for (let i = shortcuts.length; i < currentElements.length; i++) {
-            elementPool.push(currentElements[i]);
-        }
-        
-        // 批量更新DOM
         grid.innerHTML = '';
         grid.appendChild(fragment);
         
         await Storage.set('shortcuts', JSON.stringify(shortcuts));
     }
-    
-    // 辅助函数：确保URL有协议前缀
-    function getFullUrl(url) {
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
-            return 'https://' + url;
-        }
-        return url;
-    }
-    
-    // 标准化hostname以提高缓存命中率
-    function getStandardHostname(url) {
-        try {
-            const hostname = new URL(getFullUrl(url)).hostname;
-            // 移除 www 前缀以标准化
-            return hostname.replace(/^www\./, '');
-        } catch (e) {
-            console.error('URL解析失败:', url, e);
-            return url;
-        }
-    }
-    
-    // 获取网站favicon并缓存到localStorage
-
     
     // 页面加载完成后渲染快捷方式
     await renderShortcuts();
@@ -849,142 +721,76 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 全局状态变量，确保所有元素共享同一份状态
     let lastInsertPosition = null;
     
-    function addDragEvents(item) {
+    function addDragEvents(item, signal) {
         item.addEventListener('dragstart', (e) => {
             dragStartIndex = parseInt(item.dataset.index);
             currentDragElement = item;
             item.classList.add('dragging');
             item.style.opacity = '0.5';
             
-            // 设置拖拽数据
             e.dataTransfer.setData('text/plain', item.dataset.index);
             e.dataTransfer.effectAllowed = 'move';
             
-            // 每次开始拖拽时重置位置状态
             lastInsertPosition = null;
-            
-            // 清理所有快捷方式的hover状态
-            const allShortcuts = grid.querySelectorAll('.shortcut-item');
-            allShortcuts.forEach(shortcut => {
-                if (shortcut !== currentDragElement) {
-                    shortcut.classList.remove('hover');
-                }
-            });
-        });
+        }, { signal });
         
         item.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.stopPropagation();
-        });
-        
-        // 用于跟踪上一个目标元素，以避免重复触发
-        let lastTargetElement = null;
+        }, { signal });
         
         item.addEventListener('dragenter', (e) => {
             e.preventDefault();
             e.stopPropagation();
             
-            // 只有当不是从自身拖拽到自身时才重新排列
             if (currentDragElement !== item) {
                 const fromIndex = dragStartIndex;
                 const toIndex = parseInt(item.dataset.index);
                 
                 if (fromIndex !== toIndex) {
-                    // 记录插入位置，避免重复操作
                     const insertPosition = `${fromIndex}-${toIndex}`;
-                    if (lastInsertPosition === insertPosition) {
-                        return;
-                    }
+                    if (lastInsertPosition === insertPosition) return;
                     lastInsertPosition = insertPosition;
                     
-                    // 直接操作DOM元素位置，不修改数据
                     if (fromIndex < toIndex) {
-                        // 向后移动
                         item.parentNode.insertBefore(currentDragElement, item.nextSibling);
                     } else {
-                        // 向前移动
                         item.parentNode.insertBefore(currentDragElement, item);
                     }
                     
-                    // 更新起始索引
                     dragStartIndex = toIndex;
                 }
             }
-        });
-        
-        item.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            // 只有当不是从自身拖拽到自身时才重新排列
-            if (currentDragElement !== item) {
-                const fromIndex = dragStartIndex;
-                const toIndex = parseInt(item.dataset.index);
-                
-                if (fromIndex !== toIndex) {
-                    // 记录插入位置，避免重复操作
-                    const insertPosition = `${fromIndex}-${toIndex}`;
-                    if (lastInsertPosition === insertPosition) {
-                        return;
-                    }
-                    lastInsertPosition = insertPosition;
-                    
-                    // 直接操作DOM元素位置，不修改数据
-                    if (fromIndex < toIndex) {
-                        // 向后移动
-                        item.parentNode.insertBefore(currentDragElement, item.nextSibling);
-                    } else {
-                        // 向前移动
-                        item.parentNode.insertBefore(currentDragElement, item);
-                    }
-                    
-                    // 更新起始索引
-                    dragStartIndex = toIndex;
-                }
-            }
-        });
-        
-        item.addEventListener('dragleave', (e) => {
-            // 不需要在这里做任何事情
-        });
+        }, { signal });
         
         item.addEventListener('drop', (e) => {
             e.preventDefault();
             e.stopPropagation();
-        });
+        }, { signal });
         
         item.addEventListener('dragend', async () => {
-            // 拖拽结束后，根据DOM顺序重建数据
             const shortcutItems = grid.querySelectorAll('.shortcut-item');
             const newShortcuts = [];
             
-            shortcutItems.forEach((shortcutItem, index) => {
+            shortcutItems.forEach((shortcutItem) => {
                 const itemIndex = parseInt(shortcutItem.dataset.index);
                 newShortcuts.push(shortcuts[itemIndex]);
-                // 更新索引
+            });
+            
+            shortcutItems.forEach((shortcutItem, index) => {
                 shortcutItem.dataset.index = index;
             });
             
-            // 更新数据模型
             shortcuts = newShortcuts;
-            
-            // 保存到localStorage
             await Storage.set('shortcuts', JSON.stringify(shortcuts));
             
-            // 清理样式
             if (currentDragElement) {
                 currentDragElement.classList.remove('dragging');
                 currentDragElement.style.opacity = '';
             }
             currentDragElement = null;
             lastInsertPosition = null;
-            
-            // 清理所有快捷方式的hover状态
-            const allShortcuts = grid.querySelectorAll('.shortcut-item');
-            allShortcuts.forEach(shortcut => {
-                shortcut.classList.remove('hover');
-            });
-        });
+        }, { signal });
     }
     
 
@@ -1041,11 +847,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     cancelBtn.addEventListener('click', () => editDialog.close());
 
-    // 初始化右键菜单颜色模式
-    function initContextMenuColorMode() {
-        // 这个函数现在不需要了，因为我们已经在updateTextColorClasses函数中处理了右键菜单的颜色
-    }
-    
     // --- 7. 右键菜单 ---
     function showContextMenu(e, index) {
         e.preventDefault(); 
@@ -1096,21 +897,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             contextMenu.classList.add('hidden');
         }
     });
-    
-    // 应用存储的主题
-    async function applyStoredTheme(theme) {
-        const body = document.body;
-        body.classList.remove('light-bg');
-        
-        // 使用存储的主题
-        // 不再添加light-bg类，避免影响页面元素
-        
-        // 更新文本颜色类
-        await updateTextColorClasses(theme);
-        
-        // 更新对话框颜色模式
-        await updateDialogColorMode(theme);
-    }
     
     // 应用颜色模式
     async function applyColorMode(mode) {
@@ -1176,55 +962,64 @@ document.addEventListener('DOMContentLoaded', async () => {
             const img = new Image();
             img.crossOrigin = 'Anonymous';
             img.onload = function() {
-                // 创建canvas来分析图片
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                ctx.drawImage(img, 0, 0);
-                
-                // 获取图片中心1/3区域的像素数据
-                const centerX = Math.floor(img.width / 2);
-                const centerY = Math.floor(img.height / 2);
-                const sampleWidth = Math.floor(img.width / 3);
-                const sampleHeight = Math.floor(img.height / 3);
-                const startX = centerX - Math.floor(sampleWidth / 2);
-                const startY = centerY - Math.floor(sampleHeight / 2);
-                
-                const imageData = ctx.getImageData(startX, startY, sampleWidth, sampleHeight);
-                const data = imageData.data;
-                
-                // 计算平均亮度
-                let totalBrightness = 0;
-                let count = 0;
-                for (let i = 0; i < data.length; i += 4) {
-                    const r = data[i];
-                    const g = data[i + 1];
-                    const b = data[i + 2];
-                    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-                    totalBrightness += brightness;
-                    count++;
+                try {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    
+                    const centerX = Math.floor(img.width / 2);
+                    const centerY = Math.floor(img.height / 2);
+                    const sampleWidth = Math.floor(img.width / 3);
+                    const sampleHeight = Math.floor(img.height / 3);
+                    const startX = centerX - Math.floor(sampleWidth / 2);
+                    const startY = centerY - Math.floor(sampleHeight / 2);
+                    
+                    const imageData = ctx.getImageData(startX, startY, sampleWidth, sampleHeight);
+                    const data = imageData.data;
+                    
+                    let totalBrightness = 0;
+                    let count = 0;
+                    for (let i = 0; i < data.length; i += 4) {
+                        const r = data[i];
+                        const g = data[i + 1];
+                        const b = data[i + 2];
+                        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+                        totalBrightness += brightness;
+                        count++;
+                    }
+                    
+                    const averageBrightness = totalBrightness / count;
+                    
+                    if (averageBrightness > 128) {
+                        theme = 'light';
+                    }
+                } catch (e) {
+                    console.warn('无法分析背景图片亮度（可能受 CORS 限制），使用默认深色主题', e);
                 }
                 
-                const averageBrightness = totalBrightness / count;
-                
-                // 根据平均亮度设置主题
-                if (averageBrightness > 128) {
-                    theme = 'light';
-                    // 不添加light-bg类，只更新文字和图标颜色
-                }
-                
-                // 存储主题信息和相关上下文
                 const themeInfo = {
                     theme: theme,
                     bgUrl: bgUrl,
                     systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
                 };
                 
-                // 异步存储主题信息和更新颜色类
                 (async function() {
                     await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
                     await updateTextColorClasses(theme);
+                })();
+            };
+            img.onerror = function() {
+                console.warn('背景图片加载失败，使用默认深色主题');
+                const themeInfo = {
+                    theme: 'dark',
+                    bgUrl: null,
+                    systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+                };
+                (async function() {
+                    await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
+                    await updateTextColorClasses('dark');
                 })();
             };
             img.src = urlMatch[1];
@@ -1403,5 +1198,3 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     initDragAndDrop();
 });
-// 元素池，用于复用DOM元素
-const elementPool = [];

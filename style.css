@@ -1,5 +1,5 @@
 :root {
-    /* 动态变量 */
+    /* 动态变�?*/
     --col-count: 5;
     --item-size: 110px;
     --bg-image: none; /* 用于存储背景图URL */
@@ -13,6 +13,12 @@
     --text-color: #ffffff;
     --text-primary: #ffffff;
     --text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+
+    /* 深色模式胶囊变量（默认） */
+    --capsule-bg: rgba(255, 255, 255, 0.08);
+    --capsule-border: rgba(255, 255, 255, 0.18);
+    --capsule-divider: rgba(255, 255, 255, 0.08);
+    --capsule-hover: rgba(255, 255, 255, 0.15);
 }
 
 /* 定义浅色模式变量 */
@@ -38,7 +44,7 @@ body {
     min-height: 100vh;
     /* 使用深色背景避免白屏闪烁 */
     background-color: #000000;
-    /* 只使用自定义背景图片，移除默认渐变 */
+    /* 只使用自定义背景图片，移除默认渐�?*/
     background-image: var(--bg-image);
     background-size: cover;
     background-position: center;
@@ -56,7 +62,7 @@ body {
     height: 100vh;
 }
 
-/* 浏览器浅色模式下，默认使用深色文字 */
+/* 浏览器浅色模式下，默认使用深色文�?*/
 @media (prefers-color-scheme: light) {
     body {
         color: #333;
@@ -72,7 +78,7 @@ body {
     pointer-events: none;
 }
 
-/* 预加载背景容器 */
+/* 预加载背景容�?*/
 #preload-bg {
     /* 确保预加载背景始终在底层 */
     z-index: -3;
@@ -86,7 +92,7 @@ body {
     left: 0;
 }
 
-/* 当有自定义背景图时隐藏 blob 和默认背景 */
+/* 当有自定义背景图时隐�?blob 和默认背�?*/
 .has-custom-bg .blobs-container {
     display: none;
 }
@@ -140,6 +146,15 @@ body {
         box-shadow: 0 15px 35px rgba(0,0,0,0.35);
     }
     
+    .shortcut-item::before {
+        background: rgba(255, 255, 255, .8);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, .1), 0 16px 32px rgba(0, 0, 0, .08);
+    }
+    
+    .shortcut-item:hover::before {
+        background: rgba(255, 255, 255, .9);
+        box-shadow: 0 15px 35px rgba(0,0,0,0.35);
+    }
     
 }
 
@@ -164,13 +179,16 @@ body {
     background: var(--capsule-bg);
     border: 1px solid var(--capsule-border);
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-    transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
+                box-shadow 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
+                background 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
+                border-color 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
     position: relative;
     outline: 0;
 }
-/* 鼠标悬停时的通用微动效 */
+/* 鼠标悬停时的通用微动�?*/
 .icon-hover:hover {
     transform: translateY(-2px);
     background: var(--capsule-hover);
@@ -195,21 +213,17 @@ body {
 }
 
 .search-capsule {
-    display: flex; 
+    display: flex;
     align-items: center;
-    width: 100%; 
+    width: 100%;
     height: 52px;
-    border-radius: 26px; 
+    border-radius: 26px;
     padding: 0 4px;
     box-sizing: border-box;
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-    position: relative;
-    outline: 0;
-    transition: all 0.3s ease;
+    transition: transform 0.3s ease,
+                box-shadow 0.3s ease,
+                background 0.3s ease,
+                border-color 0.3s ease;
 }
 
 .search-capsule:hover {
@@ -219,7 +233,7 @@ body {
 
 
 
-/* 搜索引擎选择器 */
+/* 搜索引擎选择�?*/
 
 /* 引擎选择器样式已由颜色类控制 */
 
@@ -254,7 +268,7 @@ body {
     width: 100%;
 }
 
-/* 搜索框文字颜色设置 */
+/* 搜索框文字颜色设�?*/
 .text-color-dark #search-input,
 .text-color-dark .engine-label {
     color: #333 !important;
@@ -263,7 +277,7 @@ body {
 .text-color-light #search-input,
 .text-color-light .engine-label {
     color: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
 }
 
 .search-capsule input::placeholder {
@@ -282,7 +296,7 @@ body {
     color: var(--search-icon);
 }
 
-/* 搜索框图标颜色设置 */
+/* 搜索框图标颜色设�?*/
 .icon-color-dark .search-icon,
 .icon-color-dark svg {
     color: #333 !important;
@@ -293,8 +307,8 @@ body {
 .icon-color-light svg {
     color: white !important;
     stroke: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
-    filter: drop-shadow(var(--text-shadow)); /* 使用统一的阴影变量 */
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
+    filter: drop-shadow(var(--text-shadow)); /* 使用统一的阴影变�?*/
 }
 
 /* 为设置按钮的SVG图标取消阴影效果 */
@@ -305,27 +319,62 @@ body {
 
 
 
-.hidden {
-    display: none;
-}
-
 /* 2. 快捷方式网格 */
 .grid-container {
-    display: grid; grid-template-columns: repeat(var(--col-count), 1fr); gap: 25px; width: fit-content; padding: 10px;
+    display: grid;
+    grid-template-columns: repeat(var(--col-count), 1fr);
+    gap: 25px;
+    width: fit-content;
+    padding: 10px;
 }
 .shortcut-item {
-    width: var(--item-size); height: var(--item-size); border-radius: 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; text-decoration: none; position: relative; overflow: hidden;
+    width: var(--item-size);
+    height: var(--item-size);
+    border-radius: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    text-decoration: none;
+    overflow: hidden;
+    position: relative;
+    z-index: 1;
+    background: transparent;
+    border: none;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none;
+    transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.shortcut-item::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: -1;
+    border-radius: inherit;
     background: var(--capsule-bg);
     border: 1px solid var(--capsule-border);
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-    position: relative;
-    outline: 0;
-    will-change: transform, box-shadow;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transform: translateZ(0);
+    will-change: transform;
+    transition: background 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
+                border-color 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
+                box-shadow 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
+
 .shortcut-item:hover {
-    transform: translateY(-8px) scale(1.03) !important; /* 覆盖通用 hover */
+    transform: translateY(-8px) scale(1.03);
+    z-index: 10;
+}
+
+.shortcut-item:hover::before {
     background: var(--capsule-hover);
     border-color: rgba(255,255,255,0.5);
     box-shadow: 0 15px 35px rgba(0,0,0,0.35);
@@ -346,7 +395,7 @@ body {
 
 .shortcut-item:hover img { 
     transform: scale(1.12); 
-    /* 确保悬停时也保持正确的比例 */
+    /* 确保悬停时也保持正确的比�?*/
     object-fit: contain;
 }
 
@@ -367,25 +416,31 @@ body {
 
 .shortcut-color-light .shortcut-item span {
     color: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
 }
 
-.shortcut-item.dragging { opacity: 0.3; border: 2px dashed rgba(255,255,255,0.4); transform: scale(0.95); }
+.shortcut-item.dragging { opacity: 0.3; transform: scale(0.95); }
+.shortcut-item.dragging::before { border: 2px dashed rgba(255,255,255,0.4); }
 
-/* 添加按钮 (修复居中，改用 SVG) */
+/* 添加按钮 (修复居中，改�?SVG) */
 .add-btn {
-    width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; margin-bottom: 50px; color: var(--text-primary);
-    padding: 0; /* 移除可能的默认 padding */
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-    position: relative;
-    outline: 0;
-    transition: all 0.3s ease;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
-    filter: drop-shadow(var(--text-shadow)); /* 使用统一的阴影变量 */
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    margin-bottom: 50px;
+    color: var(--text-primary);
+    padding: 0;
+    transition: transform 0.3s ease,
+                box-shadow 0.3s ease,
+                background 0.3s ease,
+                border-color 0.3s ease;
+    text-shadow: var(--text-shadow);
+    filter: drop-shadow(var(--text-shadow));
+    z-index: 1;
 }
 
 /* 添加按钮悬停效果 */
@@ -399,14 +454,22 @@ body {
 
 /* 设置按钮 */
 .settings-btn {
-    position: fixed; top: 25px; right: 25px; width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 100; color: var(--text-primary);
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
-    outline: 0;
-    transition: all 0.3s ease;
+    position: fixed;
+    top: 25px;
+    right: 25px;
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 100;
+    color: var(--text-primary);
+    transition: transform 0.3s ease,
+                box-shadow 0.3s ease,
+                background 0.3s ease,
+                border-color 0.3s ease;
 }
 
 /* 设置按钮悬停效果 */
@@ -428,8 +491,8 @@ body {
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
     min-width: 340px;
     position: relative;
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     outline: 0;
 }
 
@@ -450,12 +513,12 @@ body {
     border: 1px solid transparent;
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
     position: relative;
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     outline: 0;
     width: 100%;
     box-sizing: border-box;
-    grid-column: 1 / -1; /* 让标题横跨所有列 */
+    grid-column: 1 / -1;
 }
 
 .glass-dialog.light-bg {
@@ -502,8 +565,8 @@ body {
     transition: 0.2s;
     position: relative;
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     outline: 0;
 }
 
@@ -513,8 +576,8 @@ body {
     color: #333;
     position: relative;
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     outline: 0;
 }
 
@@ -556,7 +619,7 @@ body {
     background: rgba(255,255,255,0.15);
 }
 
-/* 自定义滑块样式 - 玻璃效果 */
+/* 自定义滑块样�?- 玻璃效果 */
 input[type="range"] {
     width: 100%;
     margin: 10px 0 20px 0;
@@ -602,7 +665,7 @@ input[type="range"]::-moz-range-thumb {
     background: #333333;
 }
 
-/* 统一的玻璃风格按钮 */
+/* 统一的玻璃风格按�?*/
 .glass-btn {
     padding: 10px 20px; 
     border-radius: 12px; 
@@ -619,10 +682,10 @@ input[type="range"]::-moz-range-thumb {
     gap: 8px;
     position: relative;
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     outline: 0;
-    min-height: 44px; /* 统一按钮高度 */
+    min-height: 44px;
 }
 
 .glass-btn:hover { 
@@ -651,29 +714,6 @@ input[type="range"]::-moz-range-thumb {
     color: #333;
     border: 1px solid rgba(0,0,0,0.1);
     background: rgba(255,255,255,0.5);
-}
-
-.glass-dialog.light-bg .icon-button-container .glass-btn {
-    color: #333;
-    border: 1px solid rgba(0,0,0,0.1);
-    background: rgba(255,255,255,0.5);
-}
-
-.glass-dialog.light-bg .icon-button-container .glass-btn:hover {
-    background: rgba(0,0,0,0.1);
-    border-color: rgba(0,0,0,0.2);
-}
-
-.glass-dialog.light-bg .icon-button-container .glass-btn.primary {
-    background: rgba(0,0,0,0.2);
-    border-color: rgba(0,0,0,0.2);
-    color: #333;
-    font-weight: 600;
-}
-
-.glass-dialog.light-bg .icon-button-container .glass-btn.primary:hover {
-    background: rgba(0,0,0,0.3);
-    border-color: rgba(0,0,0,0.3);
 }
 
 .glass-dialog.light-bg .glass-btn:hover {
@@ -718,12 +758,6 @@ input[type="range"]::-moz-range-thumb {
   display: grid;
   grid-template-columns: 1fr;
   gap: 20px;
-}
-
-.dialog-title {
-  text-align: center;
-  margin-bottom: 20px;
-  grid-column: 1 / -1;
 }
 
 .settings-modal::-webkit-scrollbar {
@@ -797,7 +831,7 @@ input[type="range"]::-moz-range-thumb {
     gap: 5px;
 }
 
-/* 已移除 scale-setting 特殊样式，使用统一的 setting-label 样式 */
+/* 已移�?scale-setting 特殊样式，使用统一�?setting-label 样式 */
 
 .setting-name {
     font-weight: normal;
@@ -838,10 +872,6 @@ input[type="range"]::-moz-range-thumb {
     grid-column: 1 / -1;
 }
 
-.settings-section:nth-child(2) {
-    grid-column: 1 / -1;
-}
-
 .dialog-actions {
     grid-column: 1 / -1;
     margin-top: 10px;
@@ -872,7 +902,7 @@ input[type="range"]::-moz-range-thumb {
     border-color: rgba(100, 100, 255, 0.9);
 }
 
-/* 确保自动模式下按钮也有高亮显示 */
+/* 确保自动模式下按钮也有高亮显�?*/
 .color-mode-buttons .glass-btn.active {
     background: rgba(100, 100, 255, 0.3);
     color: white;
@@ -897,59 +927,6 @@ input[type="range"]::-moz-range-thumb {
     padding: 10px 20px;
     min-height: 44px;
 }
-
-.engine-list-container {
-    margin: 15px 0;
-}
-
-.engine-info {
-    flex: 1;
-}
-
-.glass-dialog.light-bg .engine-name {
-    color: #333;
-}
-
-.engine-url {
-    font-size: 0.8em;
-    opacity: 0.7;
-    word-break: break-all;
-}
-
-.glass-dialog.light-bg .engine-url {
-    color: #666;
-    opacity: 1;
-}
-
-.engine-actions {
-    display: flex;
-    gap: 8px;
-}
-
-.engine-actions button {
-    background: transparent;
-    border: none;
-    color: white;
-    cursor: pointer;
-    padding: 6px;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.glass-dialog.light-bg .engine-actions button {
-    color: #333;
-}
-
-.engine-actions button:hover {
-    background: rgba(255,255,255,0.1);
-}
-
-.glass-dialog.light-bg .engine-actions button:hover {
-    background: rgba(0,0,0,0.1);
-}
-*/
 
 /* 统一设置按钮样式 */
 .settings-buttons { 
@@ -1023,7 +1000,7 @@ input[type="range"]::-moz-range-thumb {
     margin-right: 0;
 }
 
-/* 为上传图片按钮单独设置样式 */
+/* 为上传图片按钮单独设置样�?*/
 #bg-upload-input + label {
     display: flex;
     flex-direction: column;
@@ -1088,7 +1065,7 @@ input[type="range"]::-moz-range-thumb {
     flex-shrink: 0;
 }
 
-/* 确保label元素与button元素高度一致 */
+/* 确保label元素与button元素高度一�?*/
 .settings-buttons label.settings-button.glass-btn {
     flex: 1;
     display: inline-flex;
@@ -1150,8 +1127,8 @@ input[type="range"]::-moz-range-thumb {
     background: var(--capsule-bg);
     border: 1px solid var(--capsule-border);
     box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: url(#frosted);
-    -webkit-backdrop-filter: url(#frosted);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     color: var(--text-primary);
 }
 
@@ -1185,28 +1162,44 @@ input[type="range"]::-moz-range-thumb {
     margin: 5px 0;
 }
 
-.hidden { 
-    display: none; 
+.hidden {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Favicon 回退文字 */
+.favicon-fallback {
+    width: 42%;
+    height: 42%;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--text-primary);
+    pointer-events: none;
+    text-shadow: var(--text-shadow);
+}
+
+.shortcut-color-dark .favicon-fallback {
+    color: #333 !important;
+}
+
+.shortcut-color-light .favicon-fallback {
+    color: white !important;
 }
 
 /* 右键菜单颜色模式适配 */
 .context-menu.text-color-dark .menu-item {
     color: #333 !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
 }
 
 .context-menu.text-color-light .menu-item {
     color: #ffffff !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
 }
 
 /* 移除默认颜色设置，让颜色模式自动控制 */
-
-.shortcut-item.dragging {
-    opacity: 0.5;
-}
-
-/* 确保过渡动画平滑 */
-.shortcut-item {
-    transition: transform 0.2s ease;
-}
