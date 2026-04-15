@@ -1,5 +1,5 @@
-:root {
-    /* 动态变�?*/
+﻿:root {
+    /* 动态变量 */
     --col-count: 5;
     --item-size: 110px;
     --bg-image: none; /* 用于存储背景图URL */
@@ -44,7 +44,7 @@ body {
     min-height: 100vh;
     /* 使用深色背景避免白屏闪烁 */
     background-color: #000000;
-    /* 只使用自定义背景图片，移除默认渐�?*/
+    /* 只使用自定义背景图片，移除默认渐变 */
     background-image: var(--bg-image);
     background-size: cover;
     background-position: center;
@@ -62,7 +62,7 @@ body {
     height: 100vh;
 }
 
-/* 浏览器浅色模式下，默认使用深色文�?*/
+/* 浏览器浅色模式下，默认使用深色文字 */
 @media (prefers-color-scheme: light) {
     body {
         color: #333;
@@ -78,7 +78,7 @@ body {
     pointer-events: none;
 }
 
-/* 预加载背景容�?*/
+/* 预加载背景容器 */
 #preload-bg {
     /* 确保预加载背景始终在底层 */
     z-index: -3;
@@ -92,7 +92,7 @@ body {
     left: 0;
 }
 
-/* 当有自定义背景图时隐�?blob 和默认背�?*/
+/* 当有自定义背景图时隐藏 blob 和默认背景 */
 .has-custom-bg .blobs-container {
     display: none;
 }
@@ -188,7 +188,7 @@ body {
     position: relative;
     outline: 0;
 }
-/* 鼠标悬停时的通用微动�?*/
+/* 鼠标悬停时的通用微动效 */
 .icon-hover:hover {
     transform: translateY(-2px);
     background: var(--capsule-hover);
@@ -233,7 +233,7 @@ body {
 
 
 
-/* 搜索引擎选择�?*/
+/* 搜索引擎选择器 */
 
 /* 引擎选择器样式已由颜色类控制 */
 
@@ -268,7 +268,7 @@ body {
     width: 100%;
 }
 
-/* 搜索框文字颜色设�?*/
+/* 搜索框文字颜色设置 */
 .text-color-dark #search-input,
 .text-color-dark .engine-label {
     color: #333 !important;
@@ -277,7 +277,7 @@ body {
 .text-color-light #search-input,
 .text-color-light .engine-label {
     color: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
 }
 
 .search-capsule input::placeholder {
@@ -296,7 +296,7 @@ body {
     color: var(--search-icon);
 }
 
-/* 搜索框图标颜色设�?*/
+/* 搜索框图标颜色设置 */
 .icon-color-dark .search-icon,
 .icon-color-dark svg {
     color: #333 !important;
@@ -307,8 +307,8 @@ body {
 .icon-color-light svg {
     color: white !important;
     stroke: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
-    filter: drop-shadow(var(--text-shadow)); /* 使用统一的阴影变�?*/
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+    filter: drop-shadow(var(--text-shadow)); /* 使用统一的阴影变量 */
 }
 
 /* 为设置按钮的SVG图标取消阴影效果 */
@@ -395,7 +395,7 @@ body {
 
 .shortcut-item:hover img { 
     transform: scale(1.12); 
-    /* 确保悬停时也保持正确的比�?*/
+    /* 确保悬停时也保持正确的比例 */
     object-fit: contain;
 }
 
@@ -416,13 +416,13 @@ body {
 
 .shortcut-color-light .shortcut-item span {
     color: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
 }
 
 .shortcut-item.dragging { opacity: 0.3; transform: scale(0.95); }
 .shortcut-item.dragging::before { border: 2px dashed rgba(255,255,255,0.4); }
 
-/* 添加按钮 (修复居中，改�?SVG) */
+/* 添加按钮 (修复居中，改为SVG) */
 .add-btn {
     width: 56px;
     height: 56px;
@@ -619,7 +619,7 @@ body {
     background: rgba(255,255,255,0.15);
 }
 
-/* 自定义滑块样�?- 玻璃效果 */
+/* 自定义滑块样式 - 玻璃效果 */
 input[type="range"] {
     width: 100%;
     margin: 10px 0 20px 0;
@@ -665,7 +665,7 @@ input[type="range"]::-moz-range-thumb {
     background: #333333;
 }
 
-/* 统一的玻璃风格按�?*/
+/* 统一的玻璃风格按钮 */
 .glass-btn {
     padding: 10px 20px; 
     border-radius: 12px; 
@@ -831,7 +831,7 @@ input[type="range"]::-moz-range-thumb {
     gap: 5px;
 }
 
-/* 已移�?scale-setting 特殊样式，使用统一�?setting-label 样式 */
+/* 已移除 scale-setting 特殊样式，使用统一的 setting-label 样式 */
 
 .setting-name {
     font-weight: normal;
@@ -902,7 +902,7 @@ input[type="range"]::-moz-range-thumb {
     border-color: rgba(100, 100, 255, 0.9);
 }
 
-/* 确保自动模式下按钮也有高亮显�?*/
+/* 确保自动模式下按钮也有高亮显示 */
 .color-mode-buttons .glass-btn.active {
     background: rgba(100, 100, 255, 0.3);
     color: white;
@@ -1000,7 +1000,7 @@ input[type="range"]::-moz-range-thumb {
     margin-right: 0;
 }
 
-/* 为上传图片按钮单独设置样�?*/
+/* 为上传图片按钮单独设置样式 */
 #bg-upload-input + label {
     display: flex;
     flex-direction: column;
@@ -1065,7 +1065,7 @@ input[type="range"]::-moz-range-thumb {
     flex-shrink: 0;
 }
 
-/* 确保label元素与button元素高度一�?*/
+/* 确保label元素与button元素高度一致 */
 .settings-buttons label.settings-button.glass-btn {
     flex: 1;
     display: inline-flex;
@@ -1194,12 +1194,12 @@ input[type="range"]::-moz-range-thumb {
 /* 右键菜单颜色模式适配 */
 .context-menu.text-color-dark .menu-item {
     color: #333 !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
 }
 
 .context-menu.text-color-light .menu-item {
     color: #ffffff !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变�?*/
+    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
 }
 
 /* 移除默认颜色设置，让颜色模式自动控制 */
