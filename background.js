@@ -6,7 +6,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log("Executing search with text:", request.text);
       chrome.search.query({
         text: request.text,
-        disposition: 'NEW_TAB'
+        disposition: 'CURRENT_TAB'
       });
       console.log("Search executed successfully");
     } catch (e) {

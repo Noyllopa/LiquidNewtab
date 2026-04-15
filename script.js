@@ -1196,5 +1196,183 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
+    // --- Blob 物理动画引擎 ---
+    (function initBlobPhysics() {
+        const blobsContainer = document.getElementById('blobs-layer');
+        if (!blobsContainer) return;
+
+        const blobEls = blobsContainer.querySelectorAll('.blob');
+        if (blobEls.length === 0) return;
+
+        const SPEED = 0.4;
+        const DAMPING = 0.999;
+        const MIN_SPEED = 0.2;
+        const MAX_SPEED = 0.8;
+        const BOOST_SPEED = 0.5;
+        const BLUR_RADIUS = 80;
+
+        function getInitialBalls() {
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            const balls = [];
+
+            blobEls.forEach((el, i) => {
+                el.style.transform = '';
+                const w = el.offsetWidth;
+                const h = el.offsetHeight;
+                const baseLeft = el.offsetLeft;
+                const baseTop = el.offsetTop;
+                const baseCx = baseLeft + w / 2;
+                const baseCy = baseTop + h / 2;
+                const r = w / 2;
+
+                const cx = baseCx;
+                const cy = baseCy;
+
+                const angle = (Math.PI * 2 / blobEls.length) * i + Math.random() * 0.5;
+                balls.push({
+                    el,
+                    x: cx,
+                    y: cy,
+                    r,
+                    baseCx,
+                    baseCy,
+                    vx: Math.cos(angle) * SPEED * (0.8 + Math.random() * 0.4),
+                    vy: Math.sin(angle) * SPEED * (0.8 + Math.random() * 0.4),
+                    mass: r * r,
+                    scalePhase: Math.random() * Math.PI * 2,
+                    scaleFreq: 0.0003 + Math.random() * 0.0004,
+                    scaleAmp: 0.08 + Math.random() * 0.12
+                });
+            });
+
+            return balls;
+        }
+
+        let balls = getInitialBalls();
+        let startTime = performance.now();
+
+        function clampSpeed(ball) {
+            const spd = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+            if (spd > MAX_SPEED) {
+                ball.vx = (ball.vx / spd) * MAX_SPEED;
+                ball.vy = (ball.vy / spd) * MAX_SPEED;
+            } else if (spd < MIN_SPEED) {
+                const angle = Math.atan2(ball.vy, ball.vx) + (Math.random() - 0.5) * Math.PI;
+                ball.vx = Math.cos(angle) * BOOST_SPEED;
+                ball.vy = Math.sin(angle) * BOOST_SPEED;
+            }
+        }
+
+        function resolveCollision(a, b) {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const effectiveA = a.r + BLUR_RADIUS;
+            const effectiveB = b.r + BLUR_RADIUS;
+            const minDist = effectiveA + effectiveB;
+
+            if (dist < minDist && dist > 0.01) {
+                const nx = dx / dist;
+                const ny = dy / dist;
+
+                const dvx = a.vx - b.vx;
+                const dvy = a.vy - b.vy;
+                const dvDotN = dvx * nx + dvy * ny;
+
+                if (dvDotN > 0) {
+                    const totalMass = a.mass + b.mass;
+                    const impulse = (2 * dvDotN) / totalMass;
+
+                    a.vx -= impulse * b.mass * nx;
+                    a.vy -= impulse * b.mass * ny;
+                    b.vx += impulse * a.mass * nx;
+                    b.vy += impulse * a.mass * ny;
+                } else {
+                    const pushSpeed = MIN_SPEED * 1.5;
+                    a.vx -= nx * pushSpeed;
+                    a.vy -= ny * pushSpeed;
+                    b.vx += nx * pushSpeed;
+                    b.vy += ny * pushSpeed;
+                }
+
+                const overlap = (minDist - dist) / 2 + 0.5;
+                a.x -= overlap * nx;
+                a.y -= overlap * ny;
+                b.x += overlap * nx;
+                b.y += overlap * ny;
+            }
+        }
+
+        let animating = true;
+
+        function update() {
+            if (!animating) return;
+
+            const isHidden = document.documentElement.classList.contains('has-custom-bg');
+            if (isHidden) {
+                requestAnimationFrame(update);
+                return;
+            }
+
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            const now = performance.now();
+            const elapsed = now - startTime;
+
+            for (const ball of balls) {
+                ball.vx *= DAMPING;
+                ball.vy *= DAMPING;
+
+                clampSpeed(ball);
+
+                ball.x += ball.vx;
+                ball.y += ball.vy;
+
+                if (ball.x - ball.r < 0) {
+                    ball.x = ball.r;
+                    ball.vx = Math.abs(ball.vx) + 0.1;
+                } else if (ball.x + ball.r > vw) {
+                    ball.x = vw - ball.r;
+                    ball.vx = -Math.abs(ball.vx) - 0.1;
+                }
+
+                if (ball.y - ball.r < 0) {
+                    ball.y = ball.r;
+                    ball.vy = Math.abs(ball.vy) + 0.1;
+                } else if (ball.y + ball.r > vh) {
+                    ball.y = vh - ball.r;
+                    ball.vy = -Math.abs(ball.vy) - 0.1;
+                }
+            }
+
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    resolveCollision(balls[i], balls[j]);
+                }
+            }
+
+            for (const ball of balls) {
+                const tx = ball.x - ball.baseCx;
+                const ty = ball.y - ball.baseCy;
+                const scale = 1 + Math.sin(elapsed * ball.scaleFreq + ball.scalePhase) * ball.scaleAmp;
+                ball.el.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+            }
+
+            requestAnimationFrame(update);
+        }
+
+        requestAnimationFrame(update);
+
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                balls = getInitialBalls();
+                startTime = performance.now();
+            }, 300);
+        });
+    })();
+
     initDragAndDrop();
 });
