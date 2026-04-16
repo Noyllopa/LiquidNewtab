@@ -1,7 +1,28 @@
-// 统一错误显示函数
+function showToast(message, type = 'error', duration = 3000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            toast.classList.add('show');
+        });
+    });
+
+    setTimeout(() => {
+        toast.classList.remove('show');
+        toast.classList.add('hide');
+        toast.addEventListener('transitionend', () => toast.remove());
+    }, duration);
+}
+
 function showError(message, error = null) {
     console.error(message, error);
-    alert(message);
+    showToast(message, 'error');
 }
 
 // --- chrome.storage.local 兼容 localStorage 层 ---
@@ -834,7 +855,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 await renderShortcuts();
                 
-                showError('数据导入成功！');
+                showToast('数据导入成功！', 'success');
             } catch (error) {
                 showError('导入数据失败，请确保选择了有效的JSON文件。', error);
             }

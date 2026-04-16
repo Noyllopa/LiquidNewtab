@@ -1205,3 +1205,63 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* 移除默认颜色设置，让颜色模式自动控制 */
+
+/* Toast 提醒气泡 */
+.toast-container {
+    position: fixed;
+    bottom: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    pointer-events: none;
+}
+
+.toast {
+    background: rgba(30, 30, 40, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 16px;
+    padding: 12px 24px;
+    color: #fff;
+    font-size: 14px;
+    font-family: 'Segoe UI', sans-serif;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 8px 32px rgba(0, 0, 0, .2);
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    pointer-events: auto;
+    white-space: nowrap;
+    max-width: 90vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+.toast.hide {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.95);
+}
+
+.toast.toast-error {
+    border-color: rgba(255, 100, 100, 0.3);
+}
+
+.toast.toast-success {
+    border-color: rgba(100, 255, 150, 0.3);
+}
+
+body.light-bg .toast {
+    background: rgba(245, 245, 247, 0.9);
+    color: #333;
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .1), 0 8px 32px rgba(0, 0, 0, .08);
+}
