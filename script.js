@@ -132,6 +132,220 @@ window.addEventListener('beforeunload', () => {
 })();
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // --- 0. Blob 动画（最先初始化，避免闪烁） ---
+    const blobsContainer = document.getElementById('blobs-layer');
+    const blobEls = blobsContainer ? blobsContainer.querySelectorAll('.blob') : [];
+
+    const BLOB_SPEED = 0.4;
+    const BLOB_DAMPING = 0.999;
+    const BLOB_MIN_SPEED = 0.2;
+    const BLOB_MAX_SPEED = 0.8;
+    const BLOB_BOOST_SPEED = 0.5;
+    const BLOB_BLUR_RADIUS = 80;
+
+    function getInitialBalls() {
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const balls = [];
+
+        blobEls.forEach((el, i) => {
+            el.style.transform = '';
+            const w = el.offsetWidth;
+            const h = el.offsetHeight;
+            const baseLeft = el.offsetLeft;
+            const baseTop = el.offsetTop;
+            const baseCx = baseLeft + w / 2;
+            const baseCy = baseTop + h / 2;
+            const r = w / 2;
+
+            const cx = baseCx;
+            const cy = baseCy;
+
+            const angle = (Math.PI * 2 / blobEls.length) * i + Math.random() * 0.5;
+            balls.push({
+                el,
+                x: cx,
+                y: cy,
+                r,
+                baseCx,
+                baseCy,
+                vx: Math.cos(angle) * BLOB_SPEED * (0.8 + Math.random() * 0.4),
+                vy: Math.sin(angle) * BLOB_SPEED * (0.8 + Math.random() * 0.4),
+                mass: r * r,
+                scalePhase: i * Math.PI,
+                scaleFreq: 0.0003 + Math.random() * 0.0004,
+                scaleAmp: 0.08 + Math.random() * 0.12
+            });
+        });
+
+        for (let iter = 0; iter < 20; iter++) {
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    const a = balls[i];
+                    const b = balls[j];
+                    const dx = b.x - a.x;
+                    const dy = b.y - a.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const minDist = (a.r + BLOB_BLUR_RADIUS) + (b.r + BLOB_BLUR_RADIUS);
+
+                    if (dist < minDist && dist > 0.01) {
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+                        const overlap = (minDist - dist) / 2 + 0.5;
+                        a.x -= overlap * nx;
+                        a.y -= overlap * ny;
+                        b.x += overlap * nx;
+                        b.y += overlap * ny;
+                    }
+                }
+            }
+            for (const ball of balls) {
+                if (ball.x - ball.r < 0) ball.x = ball.r;
+                if (ball.x + ball.r > vw) ball.x = vw - ball.r;
+                if (ball.y - ball.r < 0) ball.y = ball.r;
+                if (ball.y + ball.r > vh) ball.y = vh - ball.r;
+            }
+        }
+
+        for (const ball of balls) {
+            const tx = ball.x - ball.baseCx;
+            const ty = ball.y - ball.baseCy;
+            ball.el.style.transform = `translate(${tx}px, ${ty}px) scale(1)`;
+        }
+
+        return balls;
+    }
+
+    let blobBalls = [];
+    let blobStartTime = performance.now();
+    let blobAnimating = true;
+
+    if (blobEls.length > 0) {
+        blobBalls = getInitialBalls();
+        blobStartTime = performance.now();
+
+        blobEls.forEach(el => el.classList.add('initialized'));
+
+        function blobClampSpeed(ball) {
+            const spd = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+            if (spd > BLOB_MAX_SPEED) {
+                ball.vx = (ball.vx / spd) * BLOB_MAX_SPEED;
+                ball.vy = (ball.vy / spd) * BLOB_MAX_SPEED;
+            } else if (spd < BLOB_MIN_SPEED) {
+                const angle = Math.atan2(ball.vy, ball.vx) + (Math.random() - 0.5) * Math.PI;
+                ball.vx = Math.cos(angle) * BLOB_BOOST_SPEED;
+                ball.vy = Math.sin(angle) * BLOB_BOOST_SPEED;
+            }
+        }
+
+        function blobResolveCollision(a, b) {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const effectiveA = a.r + BLOB_BLUR_RADIUS;
+            const effectiveB = b.r + BLOB_BLUR_RADIUS;
+            const minDist = effectiveA + effectiveB;
+
+            if (dist < minDist && dist > 0.01) {
+                const nx = dx / dist;
+                const ny = dy / dist;
+
+                const dvx = a.vx - b.vx;
+                const dvy = a.vy - b.vy;
+                const dvDotN = dvx * nx + dvy * ny;
+
+                if (dvDotN > 0) {
+                    const totalMass = a.mass + b.mass;
+                    const impulse = (2 * dvDotN) / totalMass;
+
+                    a.vx -= impulse * b.mass * nx;
+                    a.vy -= impulse * b.mass * ny;
+                    b.vx += impulse * a.mass * nx;
+                    b.vy += impulse * a.mass * ny;
+                } else {
+                    const pushSpeed = BLOB_MIN_SPEED * 1.5;
+                    a.vx -= nx * pushSpeed;
+                    a.vy -= ny * pushSpeed;
+                    b.vx += nx * pushSpeed;
+                    b.vy += ny * pushSpeed;
+                }
+
+                const overlap = (minDist - dist) / 2 + 0.5;
+                a.x -= overlap * nx;
+                a.y -= overlap * ny;
+                b.x += overlap * nx;
+                b.y += overlap * ny;
+            }
+        }
+
+        function blobUpdate() {
+            if (!blobAnimating) return;
+
+            const isHidden = document.documentElement.classList.contains('has-custom-bg');
+            if (isHidden) {
+                requestAnimationFrame(blobUpdate);
+                return;
+            }
+
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            const now = performance.now();
+            const elapsed = now - blobStartTime;
+
+            for (const ball of blobBalls) {
+                ball.vx *= BLOB_DAMPING;
+                ball.vy *= BLOB_DAMPING;
+
+                blobClampSpeed(ball);
+
+                ball.x += ball.vx;
+                ball.y += ball.vy;
+
+                if (ball.x - ball.r < 0) {
+                    ball.x = ball.r;
+                    ball.vx = Math.abs(ball.vx) + 0.1;
+                } else if (ball.x + ball.r > vw) {
+                    ball.x = vw - ball.r;
+                    ball.vx = -Math.abs(ball.vx) - 0.1;
+                }
+
+                if (ball.y - ball.r < 0) {
+                    ball.y = ball.r;
+                    ball.vy = Math.abs(ball.vy) + 0.1;
+                } else if (ball.y + ball.r > vh) {
+                    ball.y = vh - ball.r;
+                    ball.vy = -Math.abs(ball.vy) - 0.1;
+                }
+            }
+
+            for (let i = 0; i < blobBalls.length; i++) {
+                for (let j = i + 1; j < blobBalls.length; j++) {
+                    blobResolveCollision(blobBalls[i], blobBalls[j]);
+                }
+            }
+
+            for (const ball of blobBalls) {
+                const tx = ball.x - ball.baseCx;
+                const ty = ball.y - ball.baseCy;
+                const scale = 1 + Math.sin(elapsed * ball.scaleFreq + ball.scalePhase) * ball.scaleAmp;
+                ball.el.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+            }
+
+            requestAnimationFrame(blobUpdate);
+        }
+
+        requestAnimationFrame(blobUpdate);
+
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                blobBalls = getInitialBalls();
+                blobStartTime = performance.now();
+            }, 300);
+        });
+    }
+
     // --- 1. 配置与初始化 ---
 
     // 搜索相关元素
@@ -653,49 +867,105 @@ document.addEventListener('DOMContentLoaded', async () => {
         shortcutsAbortController.abort();
         shortcutsAbortController = new AbortController();
         const signal = shortcutsAbortController.signal;
-        
+
+        const FAVICON_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
+
+        const noIconShortcuts = shortcuts.filter(s => !s.icon);
+        const faviconCache = {};
+        if (noIconShortcuts.length > 0) {
+            const cacheKeys = [];
+            for (const s of noIconShortcuts) {
+                try {
+                    cacheKeys.push(`favicon_${new URL(s.url).hostname}`);
+                } catch {}
+            }
+            if (cacheKeys.length > 0) {
+                try {
+                    const cached = await new Promise(resolve => {
+                        chrome.storage.local.get(cacheKeys, resolve);
+                    });
+                    for (const key in cached) {
+                        if (cached[key] && cached[key].dataUrl) {
+                            faviconCache[key] = cached[key];
+                        }
+                    }
+                } catch {}
+            }
+        }
+
         const fragment = document.createDocumentFragment();
-        
+        const upgradeQueue = [];
+
         for (let index = 0; index < shortcuts.length; index++) {
             const item = shortcuts[index];
-            
+
             const div = document.createElement('div');
             div.className = 'shortcut-item glass-element';
             div.draggable = true;
             div.dataset.index = index;
-            
+
             const img = document.createElement('img');
             const span = document.createElement('span');
             div.appendChild(img);
             div.appendChild(span);
-            
-            let faviconUrl = item.icon; 
-            
-            if (!faviconUrl) {
-                const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
-                urlObj.searchParams.set("pageUrl", item.url); 
-                urlObj.searchParams.set("size", "256");
-                faviconUrl = urlObj.toString();
+
+            if (item.icon) {
+                img.src = item.icon;
+            } else {
+                let domain;
+                try { domain = new URL(item.url).hostname; } catch { domain = null; }
+
+                const cacheKey = domain ? `favicon_${domain}` : null;
+                const cachedEntry = cacheKey ? faviconCache[cacheKey] : null;
+
+                if (cachedEntry) {
+                    img.src = cachedEntry.dataUrl;
+                    if (Date.now() - cachedEntry.timestamp > FAVICON_CACHE_TTL) {
+                        upgradeQueue.push({ img, url: item.url });
+                    }
+                } else {
+                    const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
+                    urlObj.searchParams.set("pageUrl", item.url);
+                    urlObj.searchParams.set("size", "256");
+                    img.src = urlObj.toString();
+                    upgradeQueue.push({ img, url: item.url });
+                }
             }
-            
-            img.src = faviconUrl;
+
             img.alt = item.name;
             span.textContent = item.name;
             span.title = item.name;
-            
-            div.addEventListener('click', () => { 
-                window.location.href = item.url; 
+
+            div.addEventListener('click', () => {
+                window.location.href = item.url;
             }, { signal });
             div.addEventListener('contextmenu', (e) => showContextMenu(e, index), { signal });
             addDragEvents(div, signal);
-            
+
             fragment.appendChild(div);
         }
-        
+
         grid.innerHTML = '';
         grid.appendChild(fragment);
-        
+
         await Storage.set('shortcuts', JSON.stringify(shortcuts));
+
+        for (const { img, url } of upgradeQueue) {
+            upgradeFavicon(img, url);
+        }
+    }
+
+    async function upgradeFavicon(imgElement, pageUrl) {
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'getBestFavicon',
+                url: pageUrl
+            });
+
+            if (response && response.dataUrl && imgElement.isConnected) {
+                imgElement.src = response.dataUrl;
+            }
+        } catch {}
     }
     
     // 页面加载完成后渲染快捷方式
@@ -831,18 +1101,40 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     
     // 重新获取图标按钮事件处理
-    refreshIconBtn.addEventListener('click', () => {
+    refreshIconBtn.addEventListener('click', async () => {
         const url = urlInput.value.trim();
         if (!url) {
             showError('请输入网址后再重新获取图标');
             return;
         }
-        
-        // 使用 Chrome 原生 Favicon API 获取图标
-        const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
-        urlObj.searchParams.set("pageUrl", url.startsWith('http') ? url : 'https://' + url);
-        urlObj.searchParams.set("size", "128");
-        iconInput.value = urlObj.toString();
+
+        const fullUrl = url.startsWith('http') ? url : 'https://' + url;
+
+        refreshIconBtn.disabled = true;
+
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'getBestFavicon',
+                url: fullUrl,
+                forceRefresh: true
+            });
+
+            if (response && response.dataUrl) {
+                iconInput.value = response.dataUrl;
+            } else {
+                const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
+                urlObj.searchParams.set("pageUrl", fullUrl);
+                urlObj.searchParams.set("size", "128");
+                iconInput.value = urlObj.toString();
+            }
+        } catch {
+            const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
+            urlObj.searchParams.set("pageUrl", fullUrl);
+            urlObj.searchParams.set("size", "128");
+            iconInput.value = urlObj.toString();
+        } finally {
+            refreshIconBtn.disabled = false;
+        }
     });
     
     cancelBtn.addEventListener('click', () => editDialog.close());
@@ -1196,183 +1488,5 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-    // --- Blob 物理动画引擎 ---
-    (function initBlobPhysics() {
-        const blobsContainer = document.getElementById('blobs-layer');
-        if (!blobsContainer) return;
-
-        const blobEls = blobsContainer.querySelectorAll('.blob');
-        if (blobEls.length === 0) return;
-
-        const SPEED = 0.4;
-        const DAMPING = 0.999;
-        const MIN_SPEED = 0.2;
-        const MAX_SPEED = 0.8;
-        const BOOST_SPEED = 0.5;
-        const BLUR_RADIUS = 80;
-
-        function getInitialBalls() {
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
-            const balls = [];
-
-            blobEls.forEach((el, i) => {
-                el.style.transform = '';
-                const w = el.offsetWidth;
-                const h = el.offsetHeight;
-                const baseLeft = el.offsetLeft;
-                const baseTop = el.offsetTop;
-                const baseCx = baseLeft + w / 2;
-                const baseCy = baseTop + h / 2;
-                const r = w / 2;
-
-                const cx = baseCx;
-                const cy = baseCy;
-
-                const angle = (Math.PI * 2 / blobEls.length) * i + Math.random() * 0.5;
-                balls.push({
-                    el,
-                    x: cx,
-                    y: cy,
-                    r,
-                    baseCx,
-                    baseCy,
-                    vx: Math.cos(angle) * SPEED * (0.8 + Math.random() * 0.4),
-                    vy: Math.sin(angle) * SPEED * (0.8 + Math.random() * 0.4),
-                    mass: r * r,
-                    scalePhase: Math.random() * Math.PI * 2,
-                    scaleFreq: 0.0003 + Math.random() * 0.0004,
-                    scaleAmp: 0.08 + Math.random() * 0.12
-                });
-            });
-
-            return balls;
-        }
-
-        let balls = getInitialBalls();
-        let startTime = performance.now();
-
-        function clampSpeed(ball) {
-            const spd = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
-            if (spd > MAX_SPEED) {
-                ball.vx = (ball.vx / spd) * MAX_SPEED;
-                ball.vy = (ball.vy / spd) * MAX_SPEED;
-            } else if (spd < MIN_SPEED) {
-                const angle = Math.atan2(ball.vy, ball.vx) + (Math.random() - 0.5) * Math.PI;
-                ball.vx = Math.cos(angle) * BOOST_SPEED;
-                ball.vy = Math.sin(angle) * BOOST_SPEED;
-            }
-        }
-
-        function resolveCollision(a, b) {
-            const dx = b.x - a.x;
-            const dy = b.y - a.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const effectiveA = a.r + BLUR_RADIUS;
-            const effectiveB = b.r + BLUR_RADIUS;
-            const minDist = effectiveA + effectiveB;
-
-            if (dist < minDist && dist > 0.01) {
-                const nx = dx / dist;
-                const ny = dy / dist;
-
-                const dvx = a.vx - b.vx;
-                const dvy = a.vy - b.vy;
-                const dvDotN = dvx * nx + dvy * ny;
-
-                if (dvDotN > 0) {
-                    const totalMass = a.mass + b.mass;
-                    const impulse = (2 * dvDotN) / totalMass;
-
-                    a.vx -= impulse * b.mass * nx;
-                    a.vy -= impulse * b.mass * ny;
-                    b.vx += impulse * a.mass * nx;
-                    b.vy += impulse * a.mass * ny;
-                } else {
-                    const pushSpeed = MIN_SPEED * 1.5;
-                    a.vx -= nx * pushSpeed;
-                    a.vy -= ny * pushSpeed;
-                    b.vx += nx * pushSpeed;
-                    b.vy += ny * pushSpeed;
-                }
-
-                const overlap = (minDist - dist) / 2 + 0.5;
-                a.x -= overlap * nx;
-                a.y -= overlap * ny;
-                b.x += overlap * nx;
-                b.y += overlap * ny;
-            }
-        }
-
-        let animating = true;
-
-        function update() {
-            if (!animating) return;
-
-            const isHidden = document.documentElement.classList.contains('has-custom-bg');
-            if (isHidden) {
-                requestAnimationFrame(update);
-                return;
-            }
-
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
-            const now = performance.now();
-            const elapsed = now - startTime;
-
-            for (const ball of balls) {
-                ball.vx *= DAMPING;
-                ball.vy *= DAMPING;
-
-                clampSpeed(ball);
-
-                ball.x += ball.vx;
-                ball.y += ball.vy;
-
-                if (ball.x - ball.r < 0) {
-                    ball.x = ball.r;
-                    ball.vx = Math.abs(ball.vx) + 0.1;
-                } else if (ball.x + ball.r > vw) {
-                    ball.x = vw - ball.r;
-                    ball.vx = -Math.abs(ball.vx) - 0.1;
-                }
-
-                if (ball.y - ball.r < 0) {
-                    ball.y = ball.r;
-                    ball.vy = Math.abs(ball.vy) + 0.1;
-                } else if (ball.y + ball.r > vh) {
-                    ball.y = vh - ball.r;
-                    ball.vy = -Math.abs(ball.vy) - 0.1;
-                }
-            }
-
-            for (let i = 0; i < balls.length; i++) {
-                for (let j = i + 1; j < balls.length; j++) {
-                    resolveCollision(balls[i], balls[j]);
-                }
-            }
-
-            for (const ball of balls) {
-                const tx = ball.x - ball.baseCx;
-                const ty = ball.y - ball.baseCy;
-                const scale = 1 + Math.sin(elapsed * ball.scaleFreq + ball.scalePhase) * ball.scaleAmp;
-                ball.el.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-            }
-
-            requestAnimationFrame(update);
-        }
-
-        requestAnimationFrame(update);
-
-        let resizeTimer;
-        window.addEventListener('resize', () => {
-            clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(() => {
-                balls = getInitialBalls();
-                startTime = performance.now();
-            }, 300);
-        });
-    })();
-
     initDragAndDrop();
 });

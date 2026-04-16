@@ -14,6 +14,12 @@
     "search",
     "favicon"
   ],
+  "host_permissions": [
+    "https://t1.gstatic.com/*",
+    "https://icons.duckduckgo.com/*",
+    "https://www.google.com/s2/*",
+    "https://icon.horse/*"
+  ],
   "background": {
     "service_worker": "background.js"
   }
