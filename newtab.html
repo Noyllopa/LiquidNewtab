@@ -171,13 +171,22 @@
             <div class="settings-section">
                 <h4>背景</h4>
                 <div class="settings-buttons bg-options">
-                    <button id="bg-unsplash-btn" class="settings-button glass-btn">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7.5 6.75V0h9v6.75h-9zm9 3.75H24V24H0V10.5h7.5v6.75h9V10.5z"/></svg>
-                        <span>随机 Unsplash</span>
+                    <button id="bg-bing-btn" class="settings-button glass-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            <circle cx="8.5" cy="8.5" r="1.5"/>
+                            <polyline points="21 15 16 10 5 21"/>
+                        </svg>
+                        <span class="btn-text">随机必应壁纸</span>
+                        <span class="btn-loader">
+                            <span class="loader-dot"></span>
+                            <span class="loader-dot"></span>
+                            <span class="loader-dot"></span>
+                        </span>
                     </button>
                     <label for="bg-upload-input" class="settings-button glass-btn">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        <span>上传图片</span>
+                        <span class="btn-text">上传图片</span>
                         <input type="file" id="bg-upload-input" accept="image/*" hidden>
                     </label>
                 </div>

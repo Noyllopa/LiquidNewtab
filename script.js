@@ -378,7 +378,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const settingsClose = document.getElementById('settings-close');
     
     // 背景相关元素
-    const bgUnsplashBtn = document.getElementById('bg-unsplash-btn');
+    const bgBingBtn = document.getElementById('bg-bing-btn');
     const bgUploadInput = document.getElementById('bg-upload-input');
     const bgResetBtn = document.getElementById('bg-reset-btn');
 
@@ -615,7 +615,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     function compressImage(src, quality = 0.7) {
         return new Promise((resolve, reject) => {
             const img = new Image();
-            img.crossOrigin = 'Anonymous';
             img.onload = function() {
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
@@ -651,23 +650,45 @@ document.addEventListener('DOMContentLoaded', async () => {
             img.src = src;
         });
     }
+    
+    // 通过 fetch 获取图片为 Blob，绕过 CORS 限制
+    async function fetchImageAsDataUrl(url) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const blob = await response.blob();
+        
+        // 使用 ImageBitmap 获取尺寸并验证
+        const bitmap = await createImageBitmap(blob);
+        const { width, height } = bitmap;
+        bitmap.close();
+        
+        // 转为 Data URL
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Blob 转 Data URL 失败'));
+            reader.readAsDataURL(blob);
+        });
+    }
 
-    // [背景功能 1] 获取 Unsplash 随机图
-    // 使用一个稳定的第三方源来代理 Unsplash 随机图，避免 API Key
-    bgUnsplashBtn.addEventListener('click', async () => {
-        const originalText = bgUnsplashBtn.innerHTML;
-        bgUnsplashBtn.innerHTML = '获取中...';
-        bgUnsplashBtn.disabled = true;
+    // [背景功能 1] 获取必应随机壁纸
+    bgBingBtn.addEventListener('click', async () => {
+        if (bgBingBtn.classList.contains('loading')) return;
+        bgBingBtn.classList.add('loading');
+        bgBingBtn.disabled = true;
         
         try {
-            // 请求一个随机图片 URL (这里使用 picsum 作为稳定演示，你可以换成其他源)
-            // 如果需要真实的 Unsplash，可以使用 https://source.unsplash.com/random/1920x1080 (但不稳定)
-            // 这里用一个技巧：请求一个会重定向到最终图片地址的 URL
-            const response = await fetch('https://picsum.photos/1920/1080');
-            const finalUrl = response.url; // 获取重定向后的最终 URL
+            // 请求必应随机壁纸（使用时间戳避免缓存）
+            const timestamp = Date.now();
+            const response = await fetch(`https://api.bimg.cc/random?w=1920&h=1080&mkt=zh-CN&t=${timestamp}`);
+            const finalUrl = response.url;
+            
+            // 通过 fetch 获取图片为 Data URL（绕过 CORS）
+            const dataUrl = await fetchImageAsDataUrl(finalUrl);
             
             // 压缩图片
-            const compressedImage = await compressImage(finalUrl, 0.7);
+            const compressedImage = await compressImage(dataUrl, 0.7);
             
             // 预加载图片以减少闪烁
             const img = new Image();
@@ -680,8 +701,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             showError('获取图片失败，请重试');
             console.error(error);
         } finally {
-            bgUnsplashBtn.innerHTML = originalText;
-            bgUnsplashBtn.disabled = false;
+            bgBingBtn.classList.remove('loading');
+            bgBingBtn.disabled = false;
         }
     });
 

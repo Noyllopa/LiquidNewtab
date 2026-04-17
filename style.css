@@ -981,8 +981,9 @@ input[type="range"]::-moz-range-thumb {
     white-space: nowrap;
 }
 
-/* 为随机Unsplash按钮单独设置样式 */
-#bg-unsplash-btn {
+/* 为随机必应壁纸按钮单独设置样式 */
+#bg-bing-btn {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -991,15 +992,68 @@ input[type="range"]::-moz-range-thumb {
     height: 66px;
     min-height: 66px;
     text-align: center;
+    overflow: hidden;
 }
 
-#bg-unsplash-btn span {
+/* 按钮图标 */
+#bg-bing-btn svg {
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* 按钮文字 */
+#bg-bing-btn .btn-text {
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    line-height: 1;
+}
+
+/* 加载动画容器 */
+#bg-bing-btn .btn-loader {
     display: flex;
     align-items: center;
     justify-content: center;
-    line-height: 1;
-    text-align: center;
-    margin-right: 0;
+    gap: 4px;
+    position: absolute;
+    top: 14px;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    pointer-events: none;
+}
+
+/* 加载状态 */
+#bg-bing-btn.loading svg {
+    opacity: 0;
+    transform: scale(0.8);
+}
+
+#bg-bing-btn.loading .btn-loader {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* 加载圆点 */
+.loader-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: loader-wave 1.2s ease-in-out infinite;
+}
+
+.loader-dot:nth-child(1) { animation-delay: 0s; }
+.loader-dot:nth-child(2) { animation-delay: 0.15s; }
+.loader-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes loader-wave {
+    0%, 60%, 100% {
+        transform: scale(0.6);
+        opacity: 0.3;
+    }
+    30% {
+        transform: scale(1);
+        opacity: 1;
+    }
 }
 
 /* 为上传图片按钮单独设置样式 */
