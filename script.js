@@ -1,5 +1,19 @@
 function showToast(message, type = 'error', duration = 3000) {
-    const container = document.getElementById('toast-container');
+    // dialog 通过 showModal() 打开时位于浏览器顶层（top layer），其 ::backdrop 会盖住
+    // 普通文档流中的任何元素（z-index 再高也没用）。因此当有 dialog 打开时，把气泡挂到
+    // 该 dialog 内部，使其随 dialog 一起进入顶层，避免被模糊遮罩遮挡。
+    const openDialog = document.querySelector('dialog[open]');
+    let container;
+    if (openDialog) {
+        container = openDialog.querySelector(':scope > .toast-container--dialog');
+        if (!container) {
+            container = document.createElement('div');
+            container.className = 'toast-container toast-container--dialog';
+            openDialog.appendChild(container);
+        }
+    } else {
+        container = document.getElementById('toast-container');
+    }
     if (!container) return;
 
     const toast = document.createElement('div');
@@ -16,7 +30,16 @@ function showToast(message, type = 'error', duration = 3000) {
     setTimeout(() => {
         toast.classList.remove('show');
         toast.classList.add('hide');
-        toast.addEventListener('transitionend', () => toast.remove());
+        let removed = false;
+        const remove = () => {
+            if (removed) return;
+            removed = true;
+            toast.remove();
+        };
+        toast.addEventListener('transitionend', remove, { once: true });
+        // Fallback：transitionend 在某些场景（prefers-reduced-motion、display:none、
+        // 没有过渡属性等）下不会触发，加一个兜底定时器避免 DOM 累积
+        setTimeout(remove, 500);
     }, duration);
 }
 
@@ -25,93 +48,294 @@ function showError(message, error = null) {
     showToast(message, 'error');
 }
 
+const ALLOWED_PAGE_PROTOCOLS = new Set(['http:', 'https:']);
+const ALLOWED_ICON_PROTOCOLS = new Set(['http:', 'https:', 'chrome-extension:']);
+const MAX_SHORTCUTS = 120;
+const MAX_SHORTCUT_NAME_LENGTH = 80;
+const MAX_ICON_DATA_URL_CHARS = 750 * 1024;
+// 自定义背景 data URL 的字符数安全上限：需容纳 4K 图经 JPEG 压缩后的 base64
+// （高细节 4K q0.7 可达 7–11MB 字符），故放宽至 12MB；仍作为防超长字符串的安全网
+const MAX_BACKGROUND_DATA_URL_CHARS = 12 * 1024 * 1024;
+// 必应 4K 超清壁纸接口可能返回较大图片，放宽远程图片大小上限至 16MB（压缩在客户端进行）
+const MAX_REMOTE_IMAGE_BYTES = 16 * 1024 * 1024;
+const MAX_EXPORTED_FAVICONS = 80;
+const FAVICON_CONCURRENCY = 4;
+
+// --- 壁纸模式配置 ---
+const BG_MODES = ['default', 'bing', 'custom'];
+// 必应官方壁纸接口（无鉴权、免费、稳定，最多获取近 7 天壁纸）
+const BING_API_BASE = 'https://cn.bing.com';
+const BING_API_URL = `${BING_API_BASE}/HPImageArchive.aspx?format=json&idx=0&n=8&mkt=zh-CN`;
+const BING_QUALITIES = ['uhd', 'hd'];
+// 画质标识：uhd → UHD，hd → 1920x1080（用于拼接 /th?id=OHR.XXX_{quality}.jpg&rf=LaDigue_{quality}.jpg&pid=hp）
+const BING_QUALITY_MAP = { uhd: 'UHD', hd: '1920x1080' };
+// 必应壁纸自动更换间隔（毫秒）：每 12 小时 / 每天 / 每 3 天 / 每周
+const BING_INTERVALS = [43200000, 86400000, 259200000, 604800000];
+const DEFAULT_BING_INTERVAL = 86400000;
+
+function normalizeHttpUrl(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    try {
+        const withProtocol = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+        const url = new URL(withProtocol);
+        if (!ALLOWED_PAGE_PROTOCOLS.has(url.protocol) || !url.hostname) return null;
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
+
+function isImageDataUrl(value, maxChars) {
+    return typeof value === 'string' &&
+        value.length <= maxChars &&
+        /^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,/i.test(value);
+}
+
+function sanitizeIconUrl(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (isImageDataUrl(trimmed, MAX_ICON_DATA_URL_CHARS)) return trimmed;
+
+    try {
+        const url = new URL(trimmed);
+        if (!ALLOWED_ICON_PROTOCOLS.has(url.protocol)) return null;
+        if (url.protocol === 'chrome-extension:') {
+            const currentExtensionOrigin = new URL(chrome.runtime.getURL('/')).origin;
+            if (url.origin !== currentExtensionOrigin) return null;
+        }
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
+
+function sanitizeShortcut(item) {
+    if (!item || typeof item !== 'object') return null;
+    const name = typeof item.name === 'string' ? item.name.trim().slice(0, MAX_SHORTCUT_NAME_LENGTH) : '';
+    const url = normalizeHttpUrl(item.url);
+    if (!name || !url) return null;
+
+    const sanitized = { name, url };
+    const icon = sanitizeIconUrl(item.icon);
+    if (icon) sanitized.icon = icon;
+    return sanitized;
+}
+
+function sanitizeShortcuts(value, fallback = []) {
+    const source = Array.isArray(value) ? value : fallback;
+    const result = [];
+    for (const item of source) {
+        const sanitized = sanitizeShortcut(item);
+        if (sanitized) result.push(sanitized);
+        if (result.length >= MAX_SHORTCUTS) break;
+    }
+    return result;
+}
+
+function parseJsonSafe(value, fallback) {
+    if (typeof value !== 'string') return fallback;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return fallback;
+    }
+}
+
+function clampNumber(value, min, max, fallback) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.min(max, Math.max(min, number));
+}
+
+function sanitizeColorMode(value) {
+    return ['auto', 'light', 'dark'].includes(value) ? value : 'auto';
+}
+
+function sanitizeBackgroundValue(value) {
+    if (!value || value === 'none') return null;
+    if (
+        typeof value === 'string' &&
+        value.length <= MAX_BACKGROUND_DATA_URL_CHARS &&
+        /^data:image\/(?:png|jpeg|jpg|webp);base64,/i.test(value)
+    ) {
+        return value;
+    }
+    return null;
+}
+
+function sanitizeBgMode(value) {
+    return BG_MODES.includes(value) ? value : 'default';
+}
+
+function sanitizeBingQuality(value) {
+    return BING_QUALITIES.includes(value) ? value : 'uhd';
+}
+
+function sanitizeBingInterval(value) {
+    const num = Number(value);
+    return BING_INTERVALS.includes(num) ? num : DEFAULT_BING_INTERVAL;
+}
+
+function sanitizeFaviconCache(favicons) {
+    if (!favicons || typeof favicons !== 'object' || Array.isArray(favicons)) return {};
+
+    const entries = Object.entries(favicons)
+        .filter(([key, entry]) => {
+            return /^favicon_[a-z0-9.-]+$/i.test(key) &&
+                entry &&
+                typeof entry === 'object' &&
+                isImageDataUrl(entry.dataUrl, MAX_ICON_DATA_URL_CHARS);
+        })
+        .sort((a, b) => Number(b[1].timestamp || 0) - Number(a[1].timestamp || 0))
+        .slice(0, MAX_EXPORTED_FAVICONS);
+
+    return Object.fromEntries(entries);
+}
+
+function validateImportedData(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw new Error('导入文件格式无效');
+    }
+
+    return {
+        shortcuts: data.shortcuts === undefined ? undefined : sanitizeShortcuts(data.shortcuts),
+        gridCols: data.gridCols === undefined ? undefined : clampNumber(data.gridCols, 3, 10, 5),
+        gridSize: data.gridSize === undefined ? undefined : clampNumber(data.gridSize, 80, 160, 100),
+        scale: data.scale === undefined ? undefined : clampNumber(data.scale, 50, 200, 100),
+        customBg: data.customBg === undefined ? undefined : sanitizeBackgroundValue(data.customBg),
+        bgMode: data.bgMode === undefined ? undefined : sanitizeBgMode(data.bgMode),
+        bingQuality: data.bingQuality === undefined ? undefined : sanitizeBingQuality(data.bingQuality),
+        bingInterval: data.bingInterval === undefined ? undefined : sanitizeBingInterval(data.bingInterval),
+        bingLastFetch: data.bingLastFetch === undefined ? undefined : clampNumber(data.bingLastFetch, 0, Number.MAX_SAFE_INTEGER, 0),
+        bingBg: data.bingBg === undefined ? undefined : sanitizeBackgroundValue(data.bingBg),
+        colorMode: data.colorMode === undefined ? undefined : sanitizeColorMode(data.colorMode),
+        favicons: data.favicons === undefined ? undefined : sanitizeFaviconCache(data.favicons)
+    };
+}
+
 // --- chrome.storage.local 兼容 localStorage 层 ---
 const Storage = (function() {
     let pendingWrites = {};
     let writeTimeout = null;
     let flushResolveQueue = [];
+    let writeErrorNotified = false;
     const WRITE_DELAY = 500;
 
+    function notifyWriteError() {
+        if (writeErrorNotified) return;
+        writeErrorNotified = true;
+        // 5 秒内只提示一次，避免刷屏
+        setTimeout(() => { writeErrorNotified = false; }, 5000);
+        try {
+            showToast('数据保存失败，部分设置可能未持久化', 'error');
+        } catch {}
+    }
+
     function flushWrites() {
+        if (writeTimeout) {
+            clearTimeout(writeTimeout);
+            writeTimeout = null;
+        }
+
+        const resolveQueue = flushResolveQueue;
+        flushResolveQueue = [];
+
         if (Object.keys(pendingWrites).length > 0) {
             const dataToWrite = { ...pendingWrites };
             pendingWrites = {};
-            chrome.storage.local.set(dataToWrite, () => {
-                if (chrome.runtime.lastError) {
-                    console.error('Storage write error:', chrome.runtime.lastError);
-                }
-                flushResolveQueue.forEach(resolve => resolve());
-                flushResolveQueue = [];
+            return new Promise(resolve => {
+                chrome.storage.local.set(dataToWrite, () => {
+                    const lastError = chrome.runtime.lastError;
+                    if (lastError) {
+                        console.error('Storage write error:', lastError);
+                        notifyWriteError();
+                    }
+                    resolveQueue.forEach(resolveItem => resolveItem(!lastError));
+                    resolve(!lastError);
+                });
             });
-        } else {
-            flushResolveQueue.forEach(resolve => resolve());
-            flushResolveQueue = [];
         }
-        writeTimeout = null;
+
+        resolveQueue.forEach(resolveItem => resolveItem(true));
+        return Promise.resolve(true);
     }
 
     function scheduleWrite(key, value) {
         pendingWrites[key] = value;
         if (writeTimeout) clearTimeout(writeTimeout);
         writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
+        return new Promise(resolve => {
+            flushResolveQueue.push(resolve);
+        });
     }
 
     return {
         get(key, defaultVal = null) {
             return new Promise(resolve => {
                 chrome.storage.local.get([key], res => {
+                    if (chrome.runtime.lastError) {
+                        console.error('Storage read error:', chrome.runtime.lastError);
+                        resolve(defaultVal);
+                        return;
+                    }
                     resolve(res[key] ?? defaultVal);
                 });
             });
         },
         
         set(key, value) {
-            scheduleWrite(key, value);
-            return Promise.resolve();
+            return scheduleWrite(key, value);
         },
         
         setBatch(items) {
             Object.assign(pendingWrites, items);
             if (writeTimeout) clearTimeout(writeTimeout);
             writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
-            return Promise.resolve();
+            return new Promise(resolve => {
+                flushResolveQueue.push(resolve);
+            });
         },
         
         setImmediate(key, value) {
             delete pendingWrites[key];
             return new Promise(resolve => {
                 chrome.storage.local.set({ [key]: value }, () => {
-                    if (chrome.runtime.lastError) {
-                        console.error('Storage write error:', chrome.runtime.lastError);
+                    const lastError = chrome.runtime.lastError;
+                    if (lastError) {
+                        console.error('Storage write error:', lastError);
+                        notifyWriteError();
                     }
-                    resolve();
+                    resolve(!lastError);
                 });
             });
         },
         
         remove(key) {
-            if (pendingWrites.hasOwnProperty(key)) {
-                delete pendingWrites[key];
+            const keys = Array.isArray(key) ? key : [key];
+            for (const item of keys) {
+                if (Object.prototype.hasOwnProperty.call(pendingWrites, item)) {
+                    delete pendingWrites[item];
+                }
             }
             return new Promise(resolve => {
                 chrome.storage.local.remove(key, () => {
-                    if (chrome.runtime.lastError) {
-                        console.error('Storage remove error:', chrome.runtime.lastError);
+                    const lastError = chrome.runtime.lastError;
+                    if (lastError) {
+                        console.error('Storage remove error:', lastError);
+                        notifyWriteError();
                     }
-                    resolve();
+                    resolve(!lastError);
                 });
             });
         },
         
         flush() {
-            if (writeTimeout) {
-                clearTimeout(writeTimeout);
-            }
             if (Object.keys(pendingWrites).length > 0) {
-                return new Promise(resolve => {
-                    flushResolveQueue.push(resolve);
-                    flushWrites();
-                });
+                return flushWrites();
             }
             return Promise.resolve();
         }
@@ -122,10 +346,62 @@ window.addEventListener('beforeunload', () => {
     Storage.flush();
 });
 
-// 在页面加载早期获取并应用自定义背景，避免闪烁
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+        Storage.flush();
+    }
+});
+
+// 在页面加载早期获取并应用背景与颜色模式，避免闪烁
 (async function() {
-    // 立即获取自定义背景设置
-    const savedBg = await Storage.get('customBg');
+    // 先读小值配置立即应用主题，须在读取大体积壁纸之前完成，否则阻塞导致"先深后浅"闪烁
+    const [rawBgMode, rawColorMode] = await Promise.all([
+        Storage.get('bgMode', 'default'),
+        Storage.get('colorMode', 'auto')
+    ]);
+    const bgModeValue = sanitizeBgMode(rawBgMode);
+    const colorModeValue = sanitizeColorMode(rawColorMode);
+
+    // 确定主题（与 <head> 防闪脚本逻辑一致）
+    let earlyTheme;
+    const htmlTheme = document.documentElement.classList.contains('theme-light') ? 'light'
+                    : document.documentElement.classList.contains('theme-dark') ? 'dark'
+                    : null;
+    if (htmlTheme) {
+        earlyTheme = htmlTheme;
+    } else if (colorModeValue === 'light' || colorModeValue === 'dark') {
+        earlyTheme = colorModeValue;
+    } else {
+        // 自动模式：用上次权威计算结果，缺失时回退系统偏好
+        let cached;
+        try { cached = localStorage.getItem('_resolvedTheme'); } catch(e) {}
+        if (cached === 'light' || cached === 'dark') {
+            earlyTheme = cached;
+        } else {
+            earlyTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+    }
+
+    if (document.body) {
+        document.body.classList.add(earlyTheme === 'light' ? 'light-bg' : 'dark-bg');
+        // body 已接管主题，移除 <html> 上的临时防闪类
+        document.documentElement.classList.remove('theme-light', 'theme-dark');
+    }
+    // 不在此处保存 _resolvedTheme：早期值可能不准确，覆写会污染缓存；
+    // 它仅由 applyColorMode / detectBackgroundColor 权威检测后更新
+    try {
+        localStorage.setItem('_colorMode', colorModeValue);
+        localStorage.setItem('_bgMode', bgModeValue);
+    } catch(e) {}
+
+    // 主题已应用，再读取大体积壁纸
+    let earlyImage = null;
+    if (bgModeValue === 'bing') {
+        earlyImage = sanitizeBackgroundValue(await Storage.get('bingBg'));
+    } else if (bgModeValue === 'custom') {
+        earlyImage = sanitizeBackgroundValue(await Storage.get('customBg'));
+    }
+
     const preloadBg = document.createElement('div');
     preloadBg.id = 'preload-bg';
     preloadBg.className = 'preloaded-bg';
@@ -134,238 +410,30 @@ window.addEventListener('beforeunload', () => {
     preloadBg.style.left = '0';
     preloadBg.style.width = '100vw';
     preloadBg.style.height = '100vh';
-    preloadBg.style.zIndex = '-3';
+    preloadBg.style.zIndex = '-1';
     
-    // 如果有自定义背景，立即应用
-    if (savedBg && savedBg !== 'none') {
-        preloadBg.style.backgroundImage = `url('${savedBg}')`;
+    if (earlyImage) {
+        preloadBg.style.backgroundImage = `url('${earlyImage}')`;
         preloadBg.style.opacity = '1';
-        // 标记有自定义背景，用于CSS样式控制
+        document.documentElement.style.setProperty('--bg-image', `url('${earlyImage}')`);
+        document.body.style.backgroundImage = `url('${earlyImage}')`;
         document.documentElement.classList.add('has-custom-bg');
+        try { localStorage.setItem('_hasCustomBg', '1'); } catch(e) {}
     }
     
-    // 将预加载背景添加到html根节点最前面
-    if (document.documentElement.firstChild) {
-        document.documentElement.insertBefore(preloadBg, document.documentElement.firstChild);
+    // 插入到 body 首个子节点之前
+    if (document.body) {
+        if (document.body.firstChild) {
+            document.body.insertBefore(preloadBg, document.body.firstChild);
+        } else {
+            document.body.appendChild(preloadBg);
+        }
     } else {
         document.documentElement.appendChild(preloadBg);
     }
 })();
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // --- 0. Blob 动画（最先初始化，避免闪烁） ---
-    const blobsContainer = document.getElementById('blobs-layer');
-    const blobEls = blobsContainer ? blobsContainer.querySelectorAll('.blob') : [];
-
-    const BLOB_SPEED = 0.4;
-    const BLOB_DAMPING = 0.999;
-    const BLOB_MIN_SPEED = 0.2;
-    const BLOB_MAX_SPEED = 0.8;
-    const BLOB_BOOST_SPEED = 0.5;
-    const BLOB_BLUR_RADIUS = 80;
-
-    function getInitialBalls() {
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        const balls = [];
-
-        blobEls.forEach((el, i) => {
-            el.style.transform = '';
-            const w = el.offsetWidth;
-            const h = el.offsetHeight;
-            const baseLeft = el.offsetLeft;
-            const baseTop = el.offsetTop;
-            const baseCx = baseLeft + w / 2;
-            const baseCy = baseTop + h / 2;
-            const r = w / 2;
-
-            const cx = baseCx;
-            const cy = baseCy;
-
-            const angle = (Math.PI * 2 / blobEls.length) * i + Math.random() * 0.5;
-            balls.push({
-                el,
-                x: cx,
-                y: cy,
-                r,
-                baseCx,
-                baseCy,
-                vx: Math.cos(angle) * BLOB_SPEED * (0.8 + Math.random() * 0.4),
-                vy: Math.sin(angle) * BLOB_SPEED * (0.8 + Math.random() * 0.4),
-                mass: r * r,
-                scalePhase: i * Math.PI,
-                scaleFreq: 0.0003 + Math.random() * 0.0004,
-                scaleAmp: 0.08 + Math.random() * 0.12
-            });
-        });
-
-        for (let iter = 0; iter < 20; iter++) {
-            for (let i = 0; i < balls.length; i++) {
-                for (let j = i + 1; j < balls.length; j++) {
-                    const a = balls[i];
-                    const b = balls[j];
-                    const dx = b.x - a.x;
-                    const dy = b.y - a.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-                    const minDist = (a.r + BLOB_BLUR_RADIUS) + (b.r + BLOB_BLUR_RADIUS);
-
-                    if (dist < minDist && dist > 0.01) {
-                        const nx = dx / dist;
-                        const ny = dy / dist;
-                        const overlap = (minDist - dist) / 2 + 0.5;
-                        a.x -= overlap * nx;
-                        a.y -= overlap * ny;
-                        b.x += overlap * nx;
-                        b.y += overlap * ny;
-                    }
-                }
-            }
-            for (const ball of balls) {
-                if (ball.x - ball.r < 0) ball.x = ball.r;
-                if (ball.x + ball.r > vw) ball.x = vw - ball.r;
-                if (ball.y - ball.r < 0) ball.y = ball.r;
-                if (ball.y + ball.r > vh) ball.y = vh - ball.r;
-            }
-        }
-
-        for (const ball of balls) {
-            const tx = ball.x - ball.baseCx;
-            const ty = ball.y - ball.baseCy;
-            ball.el.style.transform = `translate(${tx}px, ${ty}px) scale(1)`;
-        }
-
-        return balls;
-    }
-
-    let blobBalls = [];
-    let blobStartTime = performance.now();
-    let blobAnimating = true;
-
-    if (blobEls.length > 0) {
-        blobBalls = getInitialBalls();
-        blobStartTime = performance.now();
-
-        blobEls.forEach(el => el.classList.add('initialized'));
-
-        function blobClampSpeed(ball) {
-            const spd = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
-            if (spd > BLOB_MAX_SPEED) {
-                ball.vx = (ball.vx / spd) * BLOB_MAX_SPEED;
-                ball.vy = (ball.vy / spd) * BLOB_MAX_SPEED;
-            } else if (spd < BLOB_MIN_SPEED) {
-                const angle = Math.atan2(ball.vy, ball.vx) + (Math.random() - 0.5) * Math.PI;
-                ball.vx = Math.cos(angle) * BLOB_BOOST_SPEED;
-                ball.vy = Math.sin(angle) * BLOB_BOOST_SPEED;
-            }
-        }
-
-        function blobResolveCollision(a, b) {
-            const dx = b.x - a.x;
-            const dy = b.y - a.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const effectiveA = a.r + BLOB_BLUR_RADIUS;
-            const effectiveB = b.r + BLOB_BLUR_RADIUS;
-            const minDist = effectiveA + effectiveB;
-
-            if (dist < minDist && dist > 0.01) {
-                const nx = dx / dist;
-                const ny = dy / dist;
-
-                const dvx = a.vx - b.vx;
-                const dvy = a.vy - b.vy;
-                const dvDotN = dvx * nx + dvy * ny;
-
-                if (dvDotN > 0) {
-                    const totalMass = a.mass + b.mass;
-                    const impulse = (2 * dvDotN) / totalMass;
-
-                    a.vx -= impulse * b.mass * nx;
-                    a.vy -= impulse * b.mass * ny;
-                    b.vx += impulse * a.mass * nx;
-                    b.vy += impulse * a.mass * ny;
-                } else {
-                    const pushSpeed = BLOB_MIN_SPEED * 1.5;
-                    a.vx -= nx * pushSpeed;
-                    a.vy -= ny * pushSpeed;
-                    b.vx += nx * pushSpeed;
-                    b.vy += ny * pushSpeed;
-                }
-
-                const overlap = (minDist - dist) / 2 + 0.5;
-                a.x -= overlap * nx;
-                a.y -= overlap * ny;
-                b.x += overlap * nx;
-                b.y += overlap * ny;
-            }
-        }
-
-        function blobUpdate() {
-            if (!blobAnimating) return;
-
-            const isHidden = document.documentElement.classList.contains('has-custom-bg');
-            if (isHidden) {
-                requestAnimationFrame(blobUpdate);
-                return;
-            }
-
-            const vw = window.innerWidth;
-            const vh = window.innerHeight;
-            const now = performance.now();
-            const elapsed = now - blobStartTime;
-
-            for (const ball of blobBalls) {
-                ball.vx *= BLOB_DAMPING;
-                ball.vy *= BLOB_DAMPING;
-
-                blobClampSpeed(ball);
-
-                ball.x += ball.vx;
-                ball.y += ball.vy;
-
-                if (ball.x - ball.r < 0) {
-                    ball.x = ball.r;
-                    ball.vx = Math.abs(ball.vx) + 0.1;
-                } else if (ball.x + ball.r > vw) {
-                    ball.x = vw - ball.r;
-                    ball.vx = -Math.abs(ball.vx) - 0.1;
-                }
-
-                if (ball.y - ball.r < 0) {
-                    ball.y = ball.r;
-                    ball.vy = Math.abs(ball.vy) + 0.1;
-                } else if (ball.y + ball.r > vh) {
-                    ball.y = vh - ball.r;
-                    ball.vy = -Math.abs(ball.vy) - 0.1;
-                }
-            }
-
-            for (let i = 0; i < blobBalls.length; i++) {
-                for (let j = i + 1; j < blobBalls.length; j++) {
-                    blobResolveCollision(blobBalls[i], blobBalls[j]);
-                }
-            }
-
-            for (const ball of blobBalls) {
-                const tx = ball.x - ball.baseCx;
-                const ty = ball.y - ball.baseCy;
-                const scale = 1 + Math.sin(elapsed * ball.scaleFreq + ball.scalePhase) * ball.scaleAmp;
-                ball.el.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-            }
-
-            requestAnimationFrame(blobUpdate);
-        }
-
-        requestAnimationFrame(blobUpdate);
-
-        let resizeTimer;
-        window.addEventListener('resize', () => {
-            clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(() => {
-                blobBalls = getInitialBalls();
-                blobStartTime = performance.now();
-            }, 300);
-        });
-    }
 
     // --- 1. 配置与初始化 ---
 
@@ -378,9 +446,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     const settingsClose = document.getElementById('settings-close');
     
     // 背景相关元素
-    const bgBingBtn = document.getElementById('bg-bing-btn');
+    const bgModeButtons = document.querySelectorAll('.bg-mode-segmented .seg-btn');
+    const bgSubpanels = document.querySelectorAll('.bg-subpanel');
+    const bingRefreshBtn = document.getElementById('bing-refresh-btn');
+    const bingQualityButtons = document.querySelectorAll('.bg-quality-segmented .seg-btn');
+    const bingIntervalSelect = document.getElementById('bing-interval-select');
+    const customPreview = document.getElementById('custom-preview');
     const bgUploadInput = document.getElementById('bg-upload-input');
-    const bgResetBtn = document.getElementById('bg-reset-btn');
+    const bgRemoveBtn = document.getElementById('bg-remove-btn');
+
+    // 背景操作中断控制：令牌每次背景操作递增，用于让进行中的必应壁纸获取在用户
+    // 切换模式/上传/移除背景时静默中断；bingAbortController 用于立即中止网络请求
+    let bgActionToken = 0;
+    let bingAbortController = null;
+
+    // 最高优先级：立即确认颜色模式，须在 renderShortcuts / loadBgSettings 等耗时操作之前执行
+    const [savedColorMode, savedBgMode] = await Promise.all([
+        Storage.get('colorMode', 'auto').then(sanitizeColorMode),
+        Storage.get('bgMode', 'default').then(sanitizeBgMode)
+    ]);
+    try { localStorage.setItem('_colorMode', savedColorMode); localStorage.setItem('_bgMode', savedBgMode); } catch(e) {}
+    await applyColorMode(savedColorMode);
 
     // 数据管理元素
     const exportDataBtn = document.getElementById('export-data-btn');
@@ -398,8 +484,122 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 快捷方式相关元素
     const grid = document.getElementById('shortcuts-grid');
-    let dragStartIndex;
     let currentDragElement = null;
+
+    // ---- 背景 Blob 物理碰撞引擎（蓝/粉/紫三球弹性碰撞 + 边界反弹 + 呼吸缩放）----
+    const blobsLayer = document.getElementById('blobs-layer');
+    const blobEls = blobsLayer ? Array.from(blobsLayer.querySelectorAll('.blob')) : [];
+    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let blobRAF = null;
+    let blobState = [];
+
+    function initBlobState() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        blobState = blobEls.map((el) => {
+            const rect = el.getBoundingClientRect();
+            const r = (Math.max(rect.width, rect.height) / 2) || 240;
+            return {
+                el,
+                r,
+                x: Math.random() * Math.max(w - r * 2, 0) + r,
+                y: Math.random() * Math.max(h - r * 2, 0) + r,
+                vx: (Math.random() - 0.5) * 0.8,
+                vy: (Math.random() - 0.5) * 0.8,
+                phase: Math.random() * Math.PI * 2,
+            };
+        });
+    }
+
+    function stepBlobs() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        for (const b of blobState) {
+            b.x += b.vx;
+            b.y += b.vy;
+            if (b.x - b.r < 0) { b.x = b.r; b.vx = Math.abs(b.vx); }
+            if (b.x + b.r > w) { b.x = w - b.r; b.vx = -Math.abs(b.vx); }
+            if (b.y - b.r < 0) { b.y = b.r; b.vy = Math.abs(b.vy); }
+            if (b.y + b.r > h) { b.y = h - b.r; b.vy = -Math.abs(b.vy); }
+            const sp = Math.hypot(b.vx, b.vy);
+            if (sp < 0.18) { b.vx += (Math.random() - 0.5) * 0.12; b.vy += (Math.random() - 0.5) * 0.12; }
+            if (sp > 1.3) { b.vx *= 0.97; b.vy *= 0.97; }
+        }
+        // 球间弹性碰撞（等质量，沿法线交换速度分量并分离重叠）
+        for (let i = 0; i < blobState.length; i++) {
+            for (let j = i + 1; j < blobState.length; j++) {
+                const a = blobState[i];
+                const c = blobState[j];
+                const dx = c.x - a.x;
+                const dy = c.y - a.y;
+                const dist = Math.hypot(dx, dy) || 0.0001;
+                // 视觉半径因 blur 内缩，碰撞距离取几何半径之和的折中值，避免重叠成团或离太远
+                const minDist = (a.r + c.r) * 0.6;
+                if (dist < minDist) {
+                    const nx = dx / dist;
+                    const ny = dy / dist;
+                    const overlap = (minDist - dist) / 2;
+                    a.x -= nx * overlap; a.y -= ny * overlap;
+                    c.x += nx * overlap; c.y += ny * overlap;
+                    const va = a.vx * nx + a.vy * ny;
+                    const vc = c.vx * nx + c.vy * ny;
+                    const diff = vc - va;
+                    a.vx += diff * nx; a.vy += diff * ny;
+                    c.vx -= diff * nx; c.vy -= diff * ny;
+                }
+            }
+        }
+        const t = performance.now() / 1000;
+        for (const b of blobState) {
+            const s = 1 + Math.sin(t * 0.4 + b.phase) * 0.06;
+            b.el.style.transform = 'translate3d(' + (b.x - b.r).toFixed(1) + 'px,' + (b.y - b.r).toFixed(1) + 'px,0) scale(' + s.toFixed(3) + ')';
+        }
+        blobRAF = requestAnimationFrame(stepBlobs);
+    }
+
+    function startBlobAnimation() {
+        if (blobRAF !== null) return;
+        if (reducedMotionQuery.matches) {
+            for (const b of blobState) {
+                b.el.style.transform = 'translate3d(' + (b.x - b.r).toFixed(1) + 'px,' + (b.y - b.r).toFixed(1) + 'px,0)';
+            }
+            return;
+        }
+        blobRAF = requestAnimationFrame(stepBlobs);
+    }
+
+    function stopBlobAnimation() {
+        if (blobRAF !== null) { cancelAnimationFrame(blobRAF); blobRAF = null; }
+    }
+
+    function restartBlobAnimation() {
+        stopBlobAnimation();
+        if (!blobEls.length) return;
+        // 自定义背景时不启动动画（容器已被 CSS 隐藏）
+        if (document.documentElement.classList.contains('has-custom-bg')) return;
+        initBlobState();
+        requestAnimationFrame(() => blobEls.forEach((el) => el.classList.add('initialized')));
+        startBlobAnimation();
+    }
+
+    window.addEventListener('resize', () => {
+        if (!blobState.length) return;
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        for (const b of blobState) {
+            b.x = Math.min(Math.max(b.x, b.r), Math.max(w - b.r, b.r));
+            b.y = Math.min(Math.max(b.y, b.r), Math.max(h - b.r, b.r));
+        }
+    });
+
+    reducedMotionQuery.addEventListener('change', () => {
+        stopBlobAnimation();
+        if (!reducedMotionQuery.matches && !document.documentElement.classList.contains('has-custom-bg')) {
+            startBlobAnimation();
+        }
+    });
+
+    restartBlobAnimation();
 
     // 编辑对话框元素
     const editDialog = document.getElementById('edit-dialog');
@@ -408,6 +608,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const iconInput = document.getElementById('shortcut-icon'); // 新增图标输入框
     const iconUploadInput = document.getElementById('shortcut-icon-upload'); // 图标上传输入框
     const refreshIconBtn = document.getElementById('refresh-icon-btn'); // 重新获取图标按钮
+    const clearIconBtn = document.getElementById('clear-icon-btn');
+    const iconPreview = document.getElementById('shortcut-icon-preview');
+    const iconPreviewImg = document.getElementById('shortcut-icon-preview-img');
+    const iconPreviewText = document.getElementById('shortcut-icon-preview-text');
+    // 预览回退图标（未设置自定义图标时，展示与磁贴一致的站点 favicon；仅用于预览，不写入输入框）
+    let iconPreviewFallback = null;
     const saveBtn = document.getElementById('save-btn');
     const cancelBtn = document.getElementById('cancel-btn');
     let isEditing = false, editIndex = -1;
@@ -418,6 +624,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const menuDelete = document.getElementById('menu-delete');
     let contextMenuIndex = -1;
 
+    const settingsTabs = document.querySelectorAll('[data-settings-tab]');
+    const settingsPanels = document.querySelectorAll('[data-settings-panel]');
+
     const DEFAULT_SHORTCUTS = [
         { name: "Google", url: "https://google.com" },
         { name: "Bilibili", url: "https://bilibili.com" },
@@ -425,21 +634,54 @@ document.addEventListener('DOMContentLoaded', async () => {
         { name: "Unsplash", url: "https://unsplash.com" }
     ];
     
-    let shortcuts = JSON.parse(await Storage.get('shortcuts', JSON.stringify(DEFAULT_SHORTCUTS)));
+    let shortcuts = sanitizeShortcuts(
+        parseJsonSafe(await Storage.get('shortcuts', JSON.stringify(DEFAULT_SHORTCUTS)), DEFAULT_SHORTCUTS),
+        DEFAULT_SHORTCUTS
+    );
 
-    // 加载并应用布局设置
-    const savedCols = await Storage.get('gridCols', 5);
-    const savedSize = await Storage.get('gridSize', 100);
-    const savedScale = await Storage.get('scale', 100);
-    document.documentElement.style.setProperty('--col-count', savedCols);
-    document.documentElement.style.setProperty('--item-size', `${savedSize}px`);
-    document.documentElement.style.setProperty('--scale', savedScale / 100);
+    // 渲染中止控制（提前声明，供早期渲染使用）
+    let shortcutsAbortController = new AbortController();
+
+    function getResponsiveColCount(cols, itemSize) {
+        const gap = 20;
+        const pagePadding = window.innerWidth <= 640 ? 32 : 64;
+        const availableWidth = Math.max(itemSize, window.innerWidth - pagePadding);
+        return Math.max(1, Math.min(cols, Math.floor((availableWidth + gap) / (itemSize + gap))));
+    }
+
+    function applyLayoutSettings(cols, itemSize, scale) {
+        const normalizedCols = clampNumber(cols, 3, 10, 5);
+        const normalizedSize = clampNumber(itemSize, 80, 160, 100);
+        const normalizedScale = clampNumber(scale, 50, 200, 100);
+        const scaleValue = normalizedScale / 100;
+        const scaledItemSize = Math.round(normalizedSize * scaleValue);
+        const scaledSearchWidth = Math.round(580 * scaleValue);
+        document.documentElement.style.setProperty('--col-count', normalizedCols);
+        document.documentElement.style.setProperty('--active-col-count', getResponsiveColCount(normalizedCols, scaledItemSize));
+        document.documentElement.style.setProperty('--item-size', `${scaledItemSize}px`);
+        document.documentElement.style.setProperty('--search-width', `${scaledSearchWidth}px`);
+        document.documentElement.style.setProperty('--scale', scaleValue);
+    }
+
+    const [rawCols, rawSize, rawScale] = await Promise.all([
+        Storage.get('gridCols', 5),
+        Storage.get('gridSize', 100),
+        Storage.get('scale', 100)
+    ]);
+    const savedCols = clampNumber(rawCols, 3, 10, 5);
+    const savedSize = clampNumber(rawSize, 80, 160, 100);
+    const savedScale = clampNumber(rawScale, 50, 200, 100);
+    applyLayoutSettings(savedCols, savedSize, savedScale);
+
+    // 优先渲染快捷方式，避免等待背景/主题检测期间网格长时间空白（消除“顿一下才显示”）
+    await renderShortcuts();
 
     // --- 核心：加载并应用背景设置 ---
     const body = document.body;
     let preloadBg = document.getElementById('preload-bg');
 
     async function applyBackground(bgUrl) {
+        const safeBgUrl = sanitizeBackgroundValue(bgUrl);
         // 确保preloadBg元素存在
         if (!preloadBg) {
             preloadBg = document.getElementById('preload-bg');
@@ -448,20 +690,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 清除存储的主题信息
         await Storage.remove('backgroundThemeInfo');
         
-        if (bgUrl && bgUrl !== 'none') {
+        if (safeBgUrl) {
             // 直接应用背景图片，不再等待onload事件以提升加载速度
             if (preloadBg) {
-                preloadBg.style.backgroundImage = `url('${bgUrl}')`;
+                preloadBg.style.backgroundImage = `url('${safeBgUrl}')`;
                 preloadBg.style.opacity = '1'; // 显示图片
             }
             
             // 设置CSS变量里的背景图URL
-            document.documentElement.style.setProperty('--bg-image', `url('${bgUrl}')`);
-            // 添加类名以隐藏默认的 blob 动画层
+            document.documentElement.style.setProperty('--bg-image', `url('${safeBgUrl}')`);
+            body.style.backgroundImage = `url('${safeBgUrl}')`;
+            // 添加类名以隐藏默认的碰撞光球背景层，并停止其动画
             document.documentElement.classList.add('has-custom-bg');
+            try { localStorage.setItem('_hasCustomBg', '1'); } catch(e) {}
+            stopBlobAnimation();
             
-            // 检测背景颜色
-            detectBackgroundColor();
+            // 仅自动模式下检测背景亮度；手动模式是用户显式选择，不被壁纸亮度覆盖
+            const colorModeNow = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
+            if (colorModeNow === 'auto') {
+                await detectBackgroundColor();
+            }
         } else {
             // 移除背景图片
             if (preloadBg) {
@@ -469,13 +717,249 @@ document.addEventListener('DOMContentLoaded', async () => {
                 preloadBg.style.opacity = '0';
             }
             document.documentElement.style.setProperty('--bg-image', 'none');
+            body.style.backgroundImage = '';
             document.documentElement.classList.remove('has-custom-bg');
+            try { localStorage.removeItem('_hasCustomBg'); } catch(e) {}
+            restartBlobAnimation();
             
-            // 应用背景后检测背景颜色
-            detectBackgroundColor();
+            // 移除背景后重新应用颜色模式（自动模式将恢复跟随系统主题）
+            const currentColorMode = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
+            await applyColorMode(currentColorMode);
         }
     }
-    
+
+    // --- 壁纸模式状态机 ---
+    // 运行时状态（与 storage 保持同步，由 loadBgSettings 统一加载）
+    let bgMode = 'default';
+    let bingQuality = 'uhd';
+    let bingInterval = DEFAULT_BING_INTERVAL;
+
+    // 应用当前模式对应的背景
+    async function applyCurrentBackground() {
+        if (bgMode === 'bing') {
+            const cached = sanitizeBackgroundValue(await Storage.get('bingBg'));
+            await applyBackground(cached);
+        } else if (bgMode === 'custom') {
+            const custom = sanitizeBackgroundValue(await Storage.get('customBg'));
+            await applyBackground(custom);
+        } else {
+            await applyBackground(null);
+        }
+    }
+
+    // 更新自定义背景子面板内的预览缩略图
+    async function updatePreviews() {
+        const customImg = sanitizeBackgroundValue(await Storage.get('customBg'));
+        if (customImg) {
+            customPreview.style.backgroundImage = `url('${customImg}')`;
+            customPreview.classList.add('has-image');
+        } else {
+            customPreview.style.backgroundImage = '';
+            customPreview.classList.remove('has-image');
+        }
+    }
+
+    // 同步模式分段控件高亮与子面板可见性
+    function syncBgModeUI() {
+        bgModeButtons.forEach(btn => {
+            const active = btn.dataset.bgMode === bgMode;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+        bgSubpanels.forEach(panel => {
+            panel.hidden = panel.dataset.bgSubpanel !== bgMode;
+        });
+    }
+
+    // 切换壁纸模式
+    async function setBgMode(mode) {
+        const next = sanitizeBgMode(mode);
+        if (next === bgMode) return;
+        // 用户切换模式：中断进行中的必应壁纸获取，避免其完成后覆盖新模式背景
+        ++bgActionToken;
+        if (bingAbortController) {
+            bingAbortController.abort();
+            bingAbortController = null;
+        }
+        bgMode = next;
+        await Storage.setImmediate('bgMode', bgMode);
+        try { localStorage.setItem('_bgMode', bgMode); } catch(e) {}
+        syncBgModeUI();
+        await applyCurrentBackground();
+    }
+
+    // 加载壁纸设置并应用（初始化与数据导入后调用）
+    async function loadBgSettings() {
+        bgMode = sanitizeBgMode(await Storage.get('bgMode', 'default'));
+        try { localStorage.setItem('_bgMode', bgMode); } catch(e) {}
+        bingQuality = sanitizeBingQuality(await Storage.get('bingQuality', 'uhd'));
+        bingInterval = sanitizeBingInterval(await Storage.get('bingInterval', DEFAULT_BING_INTERVAL));
+        bingIntervalSelect.value = String(bingInterval);
+        bingQualityButtons.forEach(btn => {
+            const active = btn.dataset.bingQuality === bingQuality;
+            btn.classList.toggle('active', active);
+            btn.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+        syncBgModeUI();
+        await updatePreviews();
+        await applyCurrentBackground();
+    }
+
+    // 带超时保护的 sendMessage（防止 Service Worker 无响应时 Promise 永久挂起）
+    function sendMessageWithTimeout(message, timeoutMs, signal) {
+        return new Promise((resolve, reject) => {
+            if (signal && signal.aborted) {
+                return reject(new DOMException('Aborted', 'AbortError'));
+            }
+            const timer = setTimeout(() => {
+                cleanup();
+                reject(new DOMException('请求超时，请检查网络后重试', 'TimeoutError'));
+            }, timeoutMs);
+            const onAbort = () => {
+                cleanup();
+                reject(new DOMException('Aborted', 'AbortError'));
+            };
+            const cleanup = () => {
+                clearTimeout(timer);
+                if (signal) signal.removeEventListener('abort', onAbort);
+            };
+            if (signal) signal.addEventListener('abort', onAbort, { once: true });
+            chrome.runtime.sendMessage(message).then(resolve).catch(reject).finally(cleanup);
+        });
+    }
+
+    // 从必应官方接口随机获取一张壁纸
+    // 流程：请求 HPImageArchive API 获取近 7 天壁纸列表 → 随机选取一张 → 拼接高清/4K URL → 下载图片
+    // 路由到 background service worker 执行（service worker 享有 host_permissions 的 CORS 豁免）
+    // 注意：Bing 官方接口可能返回 JSON 或 XML，此处兼容两种格式
+    async function fetchBingWallpaper(quality, externalSignal) {
+        if (externalSignal && externalSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+        // 1. 获取壁纸元数据（超时 35 秒，略大于 background 内部的 30 秒超时）
+        let apiResponse;
+        try {
+            apiResponse = await sendMessageWithTimeout({
+                action: 'fetchJson',
+                url: BING_API_URL,
+                timeoutMs: 30000
+            }, 35000, externalSignal);
+        } catch (msgError) {
+            if (msgError.name === 'AbortError') throw msgError;
+            if (msgError.name === 'TimeoutError') {
+                throw new DOMException('获取壁纸列表超时：Service Worker 无响应，请在 chrome://extensions 重新加载扩展并关闭当前新标签页后重试', 'TimeoutError');
+            }
+            console.error('[fetchBingWallpaper] sendMessage 异常:', msgError);
+            throw new TypeError(`与后台通信失败: ${msgError.message}`);
+        }
+        if (externalSignal && externalSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (!apiResponse || !apiResponse.success || !apiResponse.data) {
+            const detail = !apiResponse ? '后台无响应（请在 chrome://extensions 重新加载扩展）'
+                : (apiResponse.error || '未知错误');
+            throw new TypeError(detail);
+        }
+
+        // 2. 解析壁纸列表（兼容 JSON 和 XML 两种响应格式）
+        let urlbases = [];
+        const payload = apiResponse.data;
+        if (payload.type === 'json' && payload.data && Array.isArray(payload.data.images)) {
+            // JSON 格式：{ images: [{ urlbase: '...' }, ...] }
+            urlbases = payload.data.images
+                .map(img => img && img.urlbase)
+                .filter(Boolean);
+        } else if (payload.type === 'text' && typeof payload.data === 'string') {
+            // XML 格式：<images><image><urlBase>...</urlBase></image>...</images>
+            try {
+                const doc = new DOMParser().parseFromString(payload.data, 'text/xml');
+                const nodes = doc.querySelectorAll('image urlBase');
+                urlbases = Array.from(nodes).map(n => n.textContent).filter(Boolean);
+            } catch {
+                throw new TypeError('XML 解析失败');
+            }
+        }
+        if (urlbases.length === 0) {
+            throw new TypeError('接口未返回壁纸数据');
+        }
+
+        // 3. 随机选取一张，拼接对应画质的完整图片 URL
+        // urlBase 格式：/th?id=OHR.Name_ZH-CN123456
+        // 完整 URL：https://cn.bing.com/th?id=OHR.Name_ZH-CN123456_UHD.jpg（或 _1920x1080.jpg）
+        const pickedBase = urlbases[Math.floor(Math.random() * urlbases.length)];
+        const qualityTag = BING_QUALITY_MAP[quality] || BING_QUALITY_MAP.uhd;
+        const imageUrl = `${BING_API_BASE}${pickedBase}_${qualityTag}.jpg`;
+        if (externalSignal && externalSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+
+        // 4. 下载图片并转为 Data URL（超时 65 秒，略大于 background 内部的 60 秒超时）
+        let imgResponse;
+        try {
+            imgResponse = await sendMessageWithTimeout({
+                action: 'fetchWallpaper',
+                url: imageUrl,
+                timeoutMs: 60000
+            }, 65000, externalSignal);
+        } catch (msgError) {
+            if (msgError.name === 'AbortError') throw msgError;
+            if (msgError.name === 'TimeoutError') {
+                throw new DOMException('图片下载超时：Service Worker 无响应，请检查网络或重新加载扩展', 'TimeoutError');
+            }
+            console.error('[fetchBingWallpaper] 图片下载异常:', msgError);
+            throw new TypeError(`图片下载失败: ${msgError.message}`);
+        }
+        if (externalSignal && externalSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (!imgResponse || !imgResponse.success) {
+            const detail = !imgResponse ? '后台无响应'
+                : (imgResponse.error || '图片下载失败');
+            throw new TypeError(detail);
+        }
+        return imgResponse.dataUrl;
+    }
+
+    // 获取必应壁纸；force=true 忽略间隔强制获取（换一张、切换画质时用）
+    async function fetchBing(force = false) {
+        if (bingRefreshBtn.classList.contains('loading')) return;
+
+        const now = Date.now();
+        const lastFetch = Number(await Storage.get('bingLastFetch', 0)) || 0;
+        // 未到期且已有缓存时直接沿用缓存，不重复抓取
+        if (!force && lastFetch && (now - lastFetch) < bingInterval) {
+            const cached = sanitizeBackgroundValue(await Storage.get('bingBg'));
+            if (cached) return;
+        }
+
+        bingRefreshBtn.classList.add('loading');
+        bingRefreshBtn.disabled = true;
+        const myToken = ++bgActionToken;
+        const controller = new AbortController();
+        bingAbortController = controller;
+
+        try {
+            const dataUrl = await fetchBingWallpaper(bingQuality, controller.signal);
+            if (myToken !== bgActionToken) return;
+            const compressedImage = await compressImage(dataUrl, 0.7);
+            if (myToken !== bgActionToken) return;
+            if (!isImageDataUrl(compressedImage, MAX_BACKGROUND_DATA_URL_CHARS)) {
+                showError('壁纸过大，请尝试切换到 1080P 高清画质');
+                return;
+            }
+            await Storage.setImmediate('bingBg', compressedImage);
+            await Storage.setImmediate('bingLastFetch', Date.now());
+            if (myToken !== bgActionToken) return;
+            if (bgMode === 'bing') await applyBackground(compressedImage);
+        } catch (error) {
+            // 被用户主动中断（切换模式/上传/移除）时不提示错误
+            if (myToken !== bgActionToken) return;
+            const reason = error.name === 'AbortError' ? '请求已取消'
+                : error.name === 'TimeoutError' ? (error.message || '请求超时，请检查网络后重试')
+                : error instanceof TypeError ? '网络请求失败，请检查网络或稍后重试'
+                : (error.message || '未知错误');
+            showError(`获取壁纸失败：${reason}`);
+            console.error('[BingWallpaper]', error);
+        } finally {
+            if (bingAbortController === controller) bingAbortController = null;
+            bingRefreshBtn.classList.remove('loading');
+            bingRefreshBtn.disabled = false;
+        }
+    }
+
     // 初始化 Input 值
     colInput.value = savedCols;
     colValDisplay.innerText = savedCols;
@@ -483,36 +967,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     scaleInput.value = savedScale;
     scaleValDisplay.innerText = savedScale + '%';
     
-    // 初始化颜色模式设置
-    const savedColorMode = await Storage.get('colorMode', 'auto');
-    document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${savedColorMode}"]`).classList.add('active');
+    // 初始化颜色模式设置（savedColorMode 已在最前方读取并应用）
+    const initialColorBtn = document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${savedColorMode}"]`);
+    if (initialColorBtn) {
+        initialColorBtn.classList.add('active');
+        initialColorBtn.setAttribute('aria-checked', 'true');
+    }
 
     // 监听系统主题变化
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     mediaQuery.addEventListener('change', async (e) => {
-        const currentColorMode = await Storage.get('colorMode', 'auto');
-        if (currentColorMode === 'auto') {
-            // 如果是自动模式，重新检测背景颜色并更新主题
-            detectBackgroundColor();
+        // 对话框始终跟随浏览器主题
+        applyDialogSystemTheme();
+
+        const currentColorMode = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
+        // 仅自动模式且无自定义背景时跟随系统主题变化；
+        // 有自定义背景时颜色由背景亮度决定，不随系统主题切换
+        if (currentColorMode === 'auto' && !document.documentElement.classList.contains('has-custom-bg')) {
+            await applyColorMode('auto');
         }
     });
     
-    // 确保自动模式下也有高亮显示
+    // 确保自动模式下按钮有高亮显示
     if (savedColorMode === 'auto') {
         const autoButton = document.querySelector(`.color-mode-buttons .glass-btn[data-mode="auto"]`);
         if (autoButton && !autoButton.classList.contains('active')) {
             autoButton.classList.add('active');
+            autoButton.setAttribute('aria-checked', 'true');
         }
-        
-        // 在自动模式下，立即检测背景颜色
-        detectBackgroundColor();
-    } else {
-        // 对于非自动模式，也要确保颜色类正确应用
-        await applyColorMode(savedColorMode);
     }
     
-    // 确保在首次加载时始终触发一次颜色检测
-    setTimeout(detectBackgroundColor, 100);
+    // 对话框独立跟随浏览器系统主题
+    applyDialogSystemTheme();
+
+    // --- 壁纸设置初始化 ---
+    await loadBgSettings();
+    // 必应壁纸模式下，若自动更换已到期（或尚无缓存），后台抓取一张新壁纸
+    if (bgMode === 'bing') {
+        fetchBing(false);
+    }
 
     // --- 2. 设置面板逻辑 ---
     settingsBtn.addEventListener('click', () => {
@@ -528,66 +1021,134 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    function activateSettingsTab(targetPanel) {
+        settingsTabs.forEach(tab => {
+            const active = tab.dataset.settingsTab === targetPanel;
+            tab.classList.toggle('active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            tab.tabIndex = active ? 0 : -1;
+        });
+
+        settingsPanels.forEach(panel => {
+            const active = panel.dataset.settingsPanel === targetPanel;
+            panel.classList.toggle('active', active);
+            panel.hidden = !active;
+        });
+    }
+
+    settingsTabs.forEach(tab => {
+        tab.addEventListener('click', () => activateSettingsTab(tab.dataset.settingsTab));
+        tab.addEventListener('keydown', (e) => {
+            const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+            if (!keys.includes(e.key)) return;
+            e.preventDefault();
+
+            const tabs = Array.from(settingsTabs);
+            const currentIndex = tabs.indexOf(tab);
+            let nextIndex = currentIndex;
+            if (e.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+            if (e.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+            if (e.key === 'Home') nextIndex = 0;
+            if (e.key === 'End') nextIndex = tabs.length - 1;
+
+            tabs[nextIndex].focus();
+            activateSettingsTab(tabs[nextIndex].dataset.settingsTab);
+        });
+    });
+
     // 布局实时监听
     colInput.addEventListener('input', async (e) => {
         colValDisplay.innerText = e.target.value;
-        document.documentElement.style.setProperty('--col-count', e.target.value);
+        e.target.setAttribute('aria-valuenow', e.target.value);
+        applyLayoutSettings(e.target.value, sizeInput.value, scaleInput.value);
         await Storage.set('gridCols', e.target.value);
     });
     
     sizeInput.addEventListener('input', async (e) => {
-        document.documentElement.style.setProperty('--item-size', `${e.target.value}px`);
+        e.target.setAttribute('aria-valuenow', e.target.value);
+        applyLayoutSettings(colInput.value, e.target.value, scaleInput.value);
         await Storage.set('gridSize', e.target.value);
     });
     
     scaleInput.addEventListener('input', async (e) => {
         scaleValDisplay.innerText = e.target.value + '%';
-        const scaleValue = e.target.value / 100;
-        document.documentElement.style.setProperty('--scale', scaleValue);
+        e.target.setAttribute('aria-valuenow', e.target.value);
+        applyLayoutSettings(colInput.value, sizeInput.value, e.target.value);
         await Storage.set('scale', e.target.value);
+    });
+
+    let layoutResizeTimer;
+    window.addEventListener('resize', () => {
+        clearTimeout(layoutResizeTimer);
+        layoutResizeTimer = setTimeout(() => {
+            applyLayoutSettings(colInput.value, sizeInput.value, scaleInput.value);
+        }, 150);
     });
     
     // 颜色模式设置监听
     colorModeButtons.forEach(button => {
         button.addEventListener('click', async (e) => {
             // 移除所有按钮的激活状态
-            colorModeButtons.forEach(btn => btn.classList.remove('active'));
+            colorModeButtons.forEach(btn => {
+                btn.classList.remove('active');
+                btn.setAttribute('aria-checked', 'false');
+            });
             
             // 为当前点击的按钮添加激活状态
             button.classList.add('active');
+            button.setAttribute('aria-checked', 'true');
             
             // 获取模式值
-            const mode = button.dataset.mode;
+            const mode = sanitizeColorMode(button.dataset.mode);
             
             // 保存设置
             await Storage.set('colorMode', mode);
+            try { localStorage.setItem('_colorMode', mode); } catch(e) {}
             
             // 如果是从特定颜色模式切换到自动模式，立即执行颜色检测
             if (mode === 'auto') {
                 // 清除旧的主题信息，强制重新计算
                 await Storage.remove('backgroundThemeInfo');
                 // 执行颜色模式应用
-                applyColorMode(mode);
+                await applyColorMode(mode);
             } else {
                 // 应用指定的颜色模式
-                applyColorMode(mode);
+                await applyColorMode(mode);
                 // 移除背景主题信息，避免自动模式切换回来时使用旧数据
                 await Storage.remove('backgroundThemeInfo');
             }
         });
+
+        button.addEventListener('keydown', (e) => {
+            const keys = ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'];
+            if (!keys.includes(e.key)) return;
+            e.preventDefault();
+
+            const buttons = Array.from(colorModeButtons);
+            const currentIndex = buttons.indexOf(button);
+            const direction = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1 : -1;
+            const nextButton = buttons[(currentIndex + direction + buttons.length) % buttons.length];
+            nextButton.focus();
+            nextButton.click();
+        });
     });
 
-    // 保存搜索引擎
-    saveBtn.addEventListener('click', async () => {
+    // 保存快捷方式
+    async function handleSaveShortcut(e) {
+        if (e) e.preventDefault();
         const name = nameInput.value.trim();
-        const url = urlInput.value.trim();
-        const icon = iconInput.value.trim();
+        const finalUrl = normalizeHttpUrl(urlInput.value);
+        const rawIcon = iconInput.value.trim();
+        const icon = sanitizeIconUrl(rawIcon);
 
-        if (name && url) {
-            let finalUrl = url;
-            if (!url.startsWith('http')) finalUrl = 'https://' + url;
+        if (rawIcon && !icon) {
+            showError('请输入有效的图标 URL 或上传图片');
+            return;
+        }
+
+        if (name && finalUrl) {
             if (isEditing) {
-                shortcuts[editIndex] = { name, url: finalUrl };
+                shortcuts[editIndex] = { name: name.slice(0, MAX_SHORTCUT_NAME_LENGTH), url: finalUrl };
                 if (icon) {
                     shortcuts[editIndex].icon = icon;
                 } else {
@@ -596,7 +1157,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 await Storage.set('shortcuts', JSON.stringify(shortcuts));
                 await renderShortcuts();
             } else {
-                const newItem = { name, url: finalUrl };
+                const newItem = { name: name.slice(0, MAX_SHORTCUT_NAME_LENGTH), url: finalUrl };
                 if (icon) newItem.icon = icon;
                 shortcuts.push(newItem);
                 await Storage.set('shortcuts', JSON.stringify(shortcuts));
@@ -604,12 +1165,76 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             
             editDialog.close();
+        } else {
+            showError('请输入有效的名称和网址');
         }
-    });
-    
+    }
 
+    // 构造与磁贴一致的站点 favicon 预览地址（chrome 内置 _favicon 接口）
+    function buildFaviconPreviewUrl(pageUrl) {
+        try {
+            const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
+            urlObj.searchParams.set("pageUrl", pageUrl);
+            urlObj.searchParams.set("size", "256");
+            return urlObj.toString();
+        } catch {
+            return null;
+        }
+    }
 
+    // 解析与磁贴完全一致的站点图标：优先读取磁贴所用的最佳 favicon 缓存（chrome.storage.local），
+    // 未命中时回退到 _favicon 接口，确保编辑预览与磁贴显示一致
+    async function resolveFaviconPreview(pageUrl) {
+        let domain = null;
+        try { domain = new URL(pageUrl).hostname; } catch {}
+        if (domain) {
+            try {
+                const cacheKey = `favicon_${domain}`;
+                const cached = await new Promise(resolve => chrome.storage.local.get(cacheKey, resolve));
+                const entry = cached && cached[cacheKey];
+                if (entry && isImageDataUrl(entry.dataUrl, MAX_ICON_DATA_URL_CHARS)) {
+                    return entry.dataUrl;
+                }
+            } catch {}
+        }
+        return buildFaviconPreviewUrl(pageUrl);
+    }
+
+    function updateIconPreview() {
+        const icon = sanitizeIconUrl(iconInput.value);
+        if (icon) {
+            iconPreviewImg.src = icon;
+            iconPreview.classList.add('has-icon');
+            iconPreviewText.textContent = '使用自定义图标';
+        } else if (iconPreviewFallback) {
+            // 未设置自定义图标时，预览与磁贴一致的站点 favicon（不写入输入框，保存时仍走自动获取）
+            iconPreviewImg.src = iconPreviewFallback;
+            iconPreview.classList.add('has-icon');
+            iconPreviewText.textContent = '自动获取网站图标';
+        } else {
+            iconPreviewImg.removeAttribute('src');
+            iconPreview.classList.remove('has-icon');
+            iconPreviewText.textContent = '自动获取网站图标';
+        }
+    }
+
+    // 绑定表单提交事件（仅 submit 一条路径，避免与 click 重复触发并保留原生 required 校验）
+    const editForm = document.getElementById('edit-form');
+    if (editForm) {
+        editForm.addEventListener('submit', handleSaveShortcut);
+    }
     cancelBtn.addEventListener('click', () => editDialog.close());
+    iconInput.addEventListener('input', updateIconPreview);
+    // 预览图加载失败时回退到占位状态（src 被清空时不触发，避免误报）
+    iconPreviewImg.addEventListener('error', () => {
+        if (!iconPreviewImg.getAttribute('src')) return;
+        iconPreview.classList.remove('has-icon');
+        iconPreviewText.textContent = '图标加载失败';
+    });
+    clearIconBtn.addEventListener('click', () => {
+        iconInput.value = '';
+        updateIconPreview();
+    });
 
     // 图片压缩函数
     function compressImage(src, quality = 0.7) {
@@ -619,8 +1244,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 
-                const maxWidth = 1920;
-                const maxHeight = 1080;
+                // 自定义背景最高支持 4K；compressImage 只缩不放，故 ≤1920×1080 的图（如必应壁纸）不受影响
+                const maxWidth = 3840;
+                const maxHeight = 2160;
                 let { width, height } = img;
                 
                 if (width > maxWidth) {
@@ -652,67 +1278,95 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // 通过 fetch 获取图片为 Blob，绕过 CORS 限制
-    async function fetchImageAsDataUrl(url) {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        
-        const blob = await response.blob();
-        
-        // 使用 ImageBitmap 获取尺寸并验证
-        const bitmap = await createImageBitmap(blob);
-        const { width, height } = bitmap;
-        bitmap.close();
-        
-        // 转为 Data URL
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(new Error('Blob 转 Data URL 失败'));
-            reader.readAsDataURL(blob);
-        });
+    // externalSignal：可选的外部中断信号（用于在用户切换模式等操作时中止壁纸获取）
+    // timeoutMs：整体超时（覆盖响应头 + 图片体下载），默认 15 秒
+    async function fetchImageAsDataUrl(url, externalSignal = null, timeoutMs = 15000) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const onExternalAbort = () => controller.abort();
+        if (externalSignal) {
+            if (externalSignal.aborted) controller.abort();
+            else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
+        try {
+            const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const blob = await response.blob();
+            // 部分图片接口未正确设置 Content-Type（返回空或 octet-stream），
+            // 仅在明确为非图片类型时拒绝；真正的有效性校验交由下方 createImageBitmap 解码完成
+            if (blob.type && blob.type !== 'application/octet-stream' && !blob.type.startsWith('image/')) {
+                throw new Error('远程资源不是图片');
+            }
+            if (blob.size > MAX_REMOTE_IMAGE_BYTES) {
+                throw new Error('远程图片过大');
+            }
+
+            // 使用 ImageBitmap 解码并验证图片有效性
+            const bitmap = await createImageBitmap(blob);
+            bitmap.close();
+
+            // 转为 Data URL
+            return await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(new Error('Blob 转 Data URL 失败'));
+                reader.readAsDataURL(blob);
+            });
+        } finally {
+            clearTimeout(timeoutId);
+            if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
+        }
     }
 
-    // [背景功能 1] 获取必应随机壁纸
-    bgBingBtn.addEventListener('click', async () => {
-        if (bgBingBtn.classList.contains('loading')) return;
-        bgBingBtn.classList.add('loading');
-        bgBingBtn.disabled = true;
-        
-        try {
-            // 请求必应随机壁纸（使用时间戳避免缓存）
-            const timestamp = Date.now();
-            const response = await fetch(`https://api.bimg.cc/random?w=1920&h=1080&mkt=zh-CN&t=${timestamp}`);
-            const finalUrl = response.url;
-            
-            // 通过 fetch 获取图片为 Data URL（绕过 CORS）
-            const dataUrl = await fetchImageAsDataUrl(finalUrl);
-            
-            // 压缩图片
-            const compressedImage = await compressImage(dataUrl, 0.7);
-            
-            // 预加载图片以减少闪烁
-            const img = new Image();
-            img.onload = async function() {
-                await Storage.setImmediate('customBg', compressedImage);
-                await applyBackground(compressedImage);
-            };
-            img.src = compressedImage;
-        } catch (error) {
-            showError('获取图片失败，请重试');
-            console.error(error);
-        } finally {
-            bgBingBtn.classList.remove('loading');
-            bgBingBtn.disabled = false;
-        }
+    // [壁纸功能 1] 背景模式切换
+    bgModeButtons.forEach(btn => {
+        btn.addEventListener('click', () => setBgMode(btn.dataset.bgMode));
     });
 
-    // [背景功能 2] 上传本地图片 (转 Base64 存储)
+    // [壁纸功能 2] 必应壁纸：换一张（强制刷新，忽略自动更换间隔）
+    bingRefreshBtn.addEventListener('click', () => fetchBing(true));
+
+    // [壁纸功能 3] 必应壁纸画质切换
+    bingQualityButtons.forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const quality = sanitizeBingQuality(btn.dataset.bingQuality);
+            if (quality === bingQuality) return;
+            bingQuality = quality;
+            await Storage.setImmediate('bingQuality', bingQuality);
+            bingQualityButtons.forEach(b => {
+                const active = b.dataset.bingQuality === bingQuality;
+                b.classList.toggle('active', active);
+                b.setAttribute('aria-checked', active ? 'true' : 'false');
+            });
+            // 切换画质后立即按新画质重新获取壁纸
+            await fetchBing(true);
+        });
+    });
+
+    // [壁纸功能 4] 必应壁纸自动更换间隔
+    bingIntervalSelect.addEventListener('change', async () => {
+        bingInterval = sanitizeBingInterval(bingIntervalSelect.value);
+        bingIntervalSelect.value = String(bingInterval);
+        await Storage.setImmediate('bingInterval', bingInterval);
+    });
+
+    // [壁纸功能 5] 上传本地图片 (转 Base64 存储)
     bgUploadInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
-        if (file.size > 5 * 1024 * 1024) {
-            showError('图片太大啦，请选择 5MB 以内的图片');
+
+        // 用户上传背景：递增令牌并中止正在进行的必应壁纸获取，避免其完成后覆盖
+        ++bgActionToken;
+        if (bingAbortController) {
+            bingAbortController.abort();
+            bingAbortController = null;
+        }
+
+        // 4K 原图（相机 JPEG / 设计稿 PNG）体积常较大，压缩在客户端进行，故放宽上传上限至 20MB；
+        // 过大的文件多为 6K/8K，解码内存峰值过高且无意义，仍予拦截
+        if (file.size > 20 * 1024 * 1024) {
+            showError('图片太大啦，请选择 20MB 以内的图片');
             bgUploadInput.value = '';
             return;
         }
@@ -722,38 +1376,57 @@ document.addEventListener('DOMContentLoaded', async () => {
             const base64String = event.target.result;
             try {
                 const compressedImage = await compressImage(base64String, 0.7);
-                
-                const img = new Image();
-                img.onload = async function() {
-                    await Storage.setImmediate('customBg', compressedImage);
-                    await applyBackground(compressedImage);
-                };
-                img.src = compressedImage;
-            } catch (e) {
-                showError('存储失败，可能是图片转换后太大了', e);
+                if (!isImageDataUrl(compressedImage, MAX_BACKGROUND_DATA_URL_CHARS)) {
+                    showError('压缩后的图片仍然过大，请选择更小的图片');
+                    return;
+                }
+                await Storage.setImmediate('customBg', compressedImage);
+                await updatePreviews();
+                // 仅自定义模式下立即应用，避免覆盖其他模式的背景
+                if (bgMode === 'custom') await applyBackground(compressedImage);
+            } catch (err) {
+                showError('存储失败，可能是图片转换后太大了', err);
             }
         };
         reader.readAsDataURL(file);
         bgUploadInput.value = '';
     });
 
-    // [背景功能 3] 重置背景
-    bgResetBtn.addEventListener('click', async () => {
+    // [壁纸功能 6] 移除自定义背景
+    bgRemoveBtn.addEventListener('click', async () => {
+        const hasCustom = sanitizeBackgroundValue(await Storage.get('customBg'));
+        if (!hasCustom) {
+            showToast('当前没有已上传的图片', 'info');
+            return;
+        }
+        if (!window.confirm('确定移除已上传的图片？')) return;
+        // 递增令牌并中止正在进行的必应壁纸获取
+        ++bgActionToken;
+        if (bingAbortController) {
+            bingAbortController.abort();
+            bingAbortController = null;
+        }
         await Storage.remove('customBg');
-        await Storage.remove('backgroundThemeInfo'); // 同时清除主题信息
-        await applyBackground('none');
-        bgUploadInput.value = ''; // 清空文件 input
+        await Storage.remove('backgroundThemeInfo');
+        await updatePreviews();
+        if (bgMode === 'custom') await applyBackground(null);
+        showToast('图片已移除', 'success');
     });
 
     // 数据导出功能
     exportDataBtn.addEventListener('click', async () => {
         // 收集所有需要导出的数据
         const exportData = {
-            shortcuts: shortcuts,
+            shortcuts: sanitizeShortcuts(shortcuts, DEFAULT_SHORTCUTS),
             gridCols: await Storage.get('gridCols', 5),
-            gridSize: await Storage.get('gridSize', 110),
+            gridSize: await Storage.get('gridSize', 100),
             scale: await Storage.get('scale', 100), // 添加显示比例设置
             customBg: await Storage.get('customBg'),
+            bgMode: await Storage.get('bgMode', 'default'),
+            bingQuality: await Storage.get('bingQuality', 'uhd'),
+            bingInterval: await Storage.get('bingInterval', DEFAULT_BING_INTERVAL),
+            bingLastFetch: await Storage.get('bingLastFetch', 0),
+            bingBg: await Storage.get('bingBg'),
             colorMode: await Storage.get('colorMode', 'auto') // 添加颜色模式设置
         };
         
@@ -761,8 +1434,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         const favicons = {};
         // 获取所有存储项
         await new Promise(resolve => {
-            chrome.storage.local.get(null, (items) => {
-                Object.keys(items).forEach(key => {
+            chrome.storage.local.get(null, (items = {}) => {
+                if (chrome.runtime.lastError) {
+                    console.error('Storage read error:', chrome.runtime.lastError);
+                    resolve();
+                    return;
+                }
+                const keys = Object.keys(items)
+                    .filter(key => key.startsWith('favicon_'))
+                    .sort((a, b) => Number(items[b]?.timestamp || 0) - Number(items[a]?.timestamp || 0))
+                    .slice(0, MAX_EXPORTED_FAVICONS);
+
+                keys.forEach(key => {
                     if (key.startsWith('favicon_')) {
                         favicons[key] = items[key];
                     }
@@ -770,7 +1453,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 resolve();
             });
         });
-        exportData.favicons = favicons;
+        exportData.favicons = sanitizeFaviconCache(favicons);
 
         // 创建一个 Blob 对象并下载
         const dataStr = JSON.stringify(exportData, null, 2);
@@ -783,6 +1466,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+        showToast('数据已导出', 'success');
     });
 
     // 数据导入功能
@@ -793,19 +1477,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         const reader = new FileReader();
         reader.onload = async function(event) {
             try {
-                const importData = JSON.parse(event.target.result);
+                const importData = validateImportedData(JSON.parse(event.target.result));
                 
                 // 导入数据
-                if (importData.shortcuts) {
+                if (importData.shortcuts !== undefined) {
                     shortcuts = importData.shortcuts;
                     await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
                 }
                 
-                if (importData.gridCols) {
+                if (importData.gridCols !== undefined) {
                     await Storage.setImmediate('gridCols', importData.gridCols);
                 }
                 
-                if (importData.gridSize) {
+                if (importData.gridSize !== undefined) {
                     await Storage.setImmediate('gridSize', importData.gridSize);
                 }
                 
@@ -820,21 +1504,53 @@ document.addEventListener('DOMContentLoaded', async () => {
                     } else {
                         await Storage.remove('customBg');
                     }
-                    await Storage.remove('backgroundThemeInfo'); // 清除主题信息
-                    await applyBackground(importData.customBg || null);
                 }
+
+                if (importData.bingBg !== undefined) {
+                    if (importData.bingBg) {
+                        await Storage.setImmediate('bingBg', importData.bingBg);
+                    } else {
+                        await Storage.remove('bingBg');
+                    }
+                }
+
+                if (importData.bingLastFetch !== undefined) {
+                    await Storage.setImmediate('bingLastFetch', importData.bingLastFetch);
+                }
+
+                if (importData.bgMode !== undefined) {
+                    await Storage.setImmediate('bgMode', importData.bgMode);
+                    try { localStorage.setItem('_bgMode', importData.bgMode); } catch(e) {}
+                }
+
+                if (importData.bingQuality !== undefined) {
+                    await Storage.setImmediate('bingQuality', importData.bingQuality);
+                }
+
+                if (importData.bingInterval !== undefined) {
+                    await Storage.setImmediate('bingInterval', importData.bingInterval);
+                }
+
+                // 清除主题信息，稍后应用背景时会重新检测
+                await Storage.remove('backgroundThemeInfo');
                 
                 // 导入颜色模式设置
                 if (importData.colorMode !== undefined) {
                     await Storage.setImmediate('colorMode', importData.colorMode);
+                    try { localStorage.setItem('_colorMode', importData.colorMode); } catch(e) {}
                 }
                 
                 // 导入favicon缓存
-                if (importData.favicons) {
+                if (importData.favicons !== undefined) {
                     // 收集所有favicon键
                     const faviconKeys = [];
                     await new Promise(resolve => {
-                        chrome.storage.local.get(null, (items) => {
+                        chrome.storage.local.get(null, (items = {}) => {
+                            if (chrome.runtime.lastError) {
+                                console.error('Storage read error:', chrome.runtime.lastError);
+                                resolve();
+                                return;
+                            }
                             Object.keys(items).forEach(key => {
                                 if (key.startsWith('favicon_')) {
                                     faviconKeys.push(key);
@@ -854,14 +1570,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 
                 // 更新UI
-                const gridCols = await Storage.get('gridCols', 5);
-                const gridSize = await Storage.get('gridSize', 110);
-                const scale = await Storage.get('scale', 100);
-                const colorMode = await Storage.get('colorMode', 'auto');
+                const gridCols = clampNumber(await Storage.get('gridCols', 5), 3, 10, 5);
+                const gridSize = clampNumber(await Storage.get('gridSize', 100), 80, 160, 100);
+                const scale = clampNumber(await Storage.get('scale', 100), 50, 200, 100);
+                const colorMode = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
                 
-                document.documentElement.style.setProperty('--col-count', gridCols);
-                document.documentElement.style.setProperty('--item-size', `${gridSize}px`);
-                document.documentElement.style.setProperty('--scale', scale / 100);
+                applyLayoutSettings(gridCols, gridSize, scale);
                 colInput.value = gridCols;
                 colValDisplay.innerText = gridCols;
                 sizeInput.value = gridSize;
@@ -871,11 +1585,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 更新颜色模式按钮状态
                 document.querySelectorAll('.color-mode-buttons .glass-btn').forEach(btn => {
                     btn.classList.remove('active');
+                    btn.setAttribute('aria-checked', 'false');
                 });
-                document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${colorMode}"]`).classList.add('active');
+                const activeBtn = document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${colorMode}"]`);
+                if (activeBtn) {
+                    activeBtn.classList.add('active');
+                    activeBtn.setAttribute('aria-checked', 'true');
+                }
                 
                 await renderShortcuts();
-                
+
+                // 重新加载并应用壁纸设置（模式/画质/间隔/背景图）
+                await loadBgSettings();
+
                 showToast('数据导入成功！', 'success');
             } catch (error) {
                 showError('导入数据失败，请确保选择了有效的JSON文件。', error);
@@ -898,17 +1620,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     searchBtn.addEventListener('click', performSearch);
-    searchInput.addEventListener('keypress', (e) => { 
-        if (e.key === 'Enter') performSearch(); 
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') performSearch();
     });
 
     // --- 4. 快捷方式渲染 ---
-    let shortcutsAbortController = new AbortController();
-
     async function renderShortcuts() {
         shortcutsAbortController.abort();
         shortcutsAbortController = new AbortController();
         const signal = shortcutsAbortController.signal;
+        shortcuts = sanitizeShortcuts(shortcuts, DEFAULT_SHORTCUTS);
 
         const FAVICON_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 
@@ -926,6 +1647,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const cached = await new Promise(resolve => {
                         chrome.storage.local.get(cacheKeys, resolve);
                     });
+                    // 异步读取完成后检查是否已被 newer render 抢占
+                    if (signal.aborted) return;
                     for (const key in cached) {
                         if (cached[key] && cached[key].dataUrl) {
                             faviconCache[key] = cached[key];
@@ -945,6 +1668,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             div.className = 'shortcut-item glass-element';
             div.draggable = true;
             div.dataset.index = index;
+            div.setAttribute('role', 'listitem');
+            div.setAttribute('tabindex', '0');
+            div.setAttribute('aria-label', `${item.name} - 快捷方式`);
 
             const img = document.createElement('img');
             const span = document.createElement('span');
@@ -974,12 +1700,21 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            img.alt = item.name;
+            img.alt = '';
+            img.setAttribute('aria-hidden', 'true');
             span.textContent = item.name;
             span.title = item.name;
 
-            div.addEventListener('click', () => {
+            // 点击和键盘事件
+            const handleActivate = () => {
                 window.location.href = item.url;
+            };
+            div.addEventListener('click', handleActivate, { signal });
+            div.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleActivate();
+                }
             }, { signal });
             div.addEventListener('contextmenu', (e) => showContextMenu(e, index), { signal });
             addDragEvents(div, signal);
@@ -987,32 +1722,73 @@ document.addEventListener('DOMContentLoaded', async () => {
             fragment.appendChild(div);
         }
 
+        // 写入 DOM 前再次检查，避免旧渲染覆盖新渲染
+        if (signal.aborted) return;
         grid.innerHTML = '';
         grid.appendChild(fragment);
 
-        await Storage.set('shortcuts', JSON.stringify(shortcuts));
-
-        for (const { img, url } of upgradeQueue) {
-            upgradeFavicon(img, url);
-        }
+        processUpgradeQueue(upgradeQueue, signal);
     }
 
-    async function upgradeFavicon(imgElement, pageUrl) {
+    async function upgradeFavicon(imgElement, pageUrl, signal) {
         try {
             const response = await chrome.runtime.sendMessage({
                 action: 'getBestFavicon',
                 url: pageUrl
             });
 
+            if (signal && signal.aborted) return;
             if (response && response.dataUrl && imgElement.isConnected) {
                 imgElement.src = response.dataUrl;
+            } else if (imgElement.isConnected && imgElement.naturalWidth === 0) {
+                applyFaviconFallback(imgElement, pageUrl);
             }
-        } catch {}
+        } catch {
+            if (imgElement.isConnected && imgElement.naturalWidth === 0) {
+                applyFaviconFallback(imgElement, pageUrl);
+            }
+        }
+    }
+
+    function applyFaviconFallback(imgElement, pageUrl) {
+        let domain = '';
+        try { domain = new URL(pageUrl).hostname; } catch {}
+        const letter = (domain || '?').charAt(0).toUpperCase();
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#5a6a8a';
+        ctx.beginPath();
+        ctx.arc(64, 64, 64, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 64px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(letter, 64, 68);
+        imgElement.src = canvas.toDataURL('image/png');
+    }
+
+    async function processUpgradeQueue(queue, signal) {
+        let index = 0;
+        async function worker() {
+            while (index < queue.length) {
+                if (signal.aborted) return;
+                const currentIndex = index++;
+                const { img, url } = queue[currentIndex];
+                await upgradeFavicon(img, url, signal);
+            }
+        }
+        const workers = [];
+        for (let i = 0; i < Math.min(FAVICON_CONCURRENCY, queue.length); i++) {
+            workers.push(worker());
+        }
+        await Promise.all(workers);
     }
     
-    // 页面加载完成后渲染快捷方式
-    await renderShortcuts();
-    
+    // 快捷方式已在初始化早期渲染（见布局设置应用后），无需重复渲染
+
     // 初始化右键菜单颜色模式
     // 不再需要单独调用，因为在updateTextColorClasses中已经处理
 
@@ -1031,47 +1807,53 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // 全局状态变量，确保所有元素共享同一份状态
-    let lastInsertPosition = null;
+
+    function clearDragIndicators() {
+        grid.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    }
     
     function addDragEvents(item, signal) {
         item.addEventListener('dragstart', (e) => {
-            dragStartIndex = parseInt(item.dataset.index);
             currentDragElement = item;
             item.classList.add('dragging');
             item.style.opacity = '0.5';
             
             e.dataTransfer.setData('text/plain', item.dataset.index);
             e.dataTransfer.effectAllowed = 'move';
-            
-            lastInsertPosition = null;
         }, { signal });
         
         item.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (currentDragElement && currentDragElement !== item) {
+                clearDragIndicators();
+                item.classList.add('drag-over');
+            }
+        }, { signal });
+
+        item.addEventListener('dragleave', () => {
+            item.classList.remove('drag-over');
         }, { signal });
         
         item.addEventListener('dragenter', (e) => {
             e.preventDefault();
             e.stopPropagation();
             
-            if (currentDragElement !== item) {
-                const fromIndex = dragStartIndex;
-                const toIndex = parseInt(item.dataset.index);
-                
-                if (fromIndex !== toIndex) {
-                    const insertPosition = `${fromIndex}-${toIndex}`;
-                    if (lastInsertPosition === insertPosition) return;
-                    lastInsertPosition = insertPosition;
-                    
-                    if (fromIndex < toIndex) {
-                        item.parentNode.insertBefore(currentDragElement, item.nextSibling);
-                    } else {
-                        item.parentNode.insertBefore(currentDragElement, item);
-                    }
-                    
-                    dragStartIndex = toIndex;
-                }
+            if (!currentDragElement || currentDragElement === item) return;
+            
+            // 基于实时 DOM 位置比较（而非滞后的 dataset.index），
+            // 确保拖拽元素能与任意目标正确交换，且可以随时拖回原位
+            const parent = item.parentNode;
+            const items = Array.from(parent.querySelectorAll('.shortcut-item'));
+            const fromIndex = items.indexOf(currentDragElement);
+            const toIndex = items.indexOf(item);
+            
+            if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
+            
+            if (fromIndex < toIndex) {
+                parent.insertBefore(currentDragElement, item.nextSibling);
+            } else {
+                parent.insertBefore(currentDragElement, item);
             }
         }, { signal });
         
@@ -1081,6 +1863,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, { signal });
         
         item.addEventListener('dragend', async () => {
+            // 先同步还原视觉状态：Storage.set 为防抖写入（WRITE_DELAY=500ms），
+            // 若 await 在前会导致拖拽元素松手后仍保持半透明"按下"状态约半秒
+            const draggedElement = currentDragElement;
+            currentDragElement = null;
+            if (draggedElement) {
+                draggedElement.classList.remove('dragging');
+                draggedElement.style.opacity = '';
+            }
+            clearDragIndicators();
+
             const shortcutItems = grid.querySelectorAll('.shortcut-item');
             const newShortcuts = [];
             
@@ -1095,13 +1887,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             shortcuts = newShortcuts;
             await Storage.set('shortcuts', JSON.stringify(shortcuts));
-            
-            if (currentDragElement) {
-                currentDragElement.classList.remove('dragging');
-                currentDragElement.style.opacity = '';
-            }
-            currentDragElement = null;
-            lastInsertPosition = null;
         }, { signal });
     }
     
@@ -1115,6 +1900,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         nameInput.value = ''; 
         urlInput.value = '';
         iconInput.value = ''; // 清空图标输入框
+        iconPreviewFallback = null; // 新建快捷方式无站点 favicon 回退
+        updateIconPreview();
         editDialog.showModal(); 
     });
 
@@ -1123,8 +1910,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const file = e.target.files[0];
         if (!file) return;
         
-        // 检查文件类型
-        if (!file.type.match('image.*')) {
+        // 检查文件类型（兼容 ICO：其 MIME 可能为 image/x-icon、image/vnd.microsoft.icon，
+        // 部分系统下甚至为空，故额外按 .ico 扩展名判断）
+        const isIcoFile = file.type === 'image/x-icon' ||
+            file.type === 'image/vnd.microsoft.icon' ||
+            /\.ico$/i.test(file.name);
+        if (!file.type.match('image.*') && !isIcoFile) {
             showError('请选择图片文件');
             return;
         }
@@ -1138,19 +1929,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         const reader = new FileReader();
         reader.onload = function(event) {
             iconInput.value = event.target.result;
+            updateIconPreview();
         };
         reader.readAsDataURL(file);
     });
     
     // 重新获取图标按钮事件处理
     refreshIconBtn.addEventListener('click', async () => {
-        const url = urlInput.value.trim();
-        if (!url) {
-            showError('请输入网址后再重新获取图标');
+        const fullUrl = normalizeHttpUrl(urlInput.value);
+        if (!fullUrl) {
+            showError('请输入有效网址后再重新获取图标');
             return;
         }
-
-        const fullUrl = url.startsWith('http') ? url : 'https://' + url;
 
         refreshIconBtn.disabled = true;
 
@@ -1169,41 +1959,81 @@ document.addEventListener('DOMContentLoaded', async () => {
                 urlObj.searchParams.set("size", "128");
                 iconInput.value = urlObj.toString();
             }
+            updateIconPreview();
         } catch {
             const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
             urlObj.searchParams.set("pageUrl", fullUrl);
             urlObj.searchParams.set("size", "128");
             iconInput.value = urlObj.toString();
+            updateIconPreview();
         } finally {
             refreshIconBtn.disabled = false;
         }
     });
     
-    cancelBtn.addEventListener('click', () => editDialog.close());
-
     // --- 7. 右键菜单 ---
+    function setContextMenuVisible(visible) {
+        contextMenu.classList.toggle('hidden', !visible);
+        contextMenu.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    }
+
     function showContextMenu(e, index) {
-        e.preventDefault(); 
+        e.preventDefault();
         e.stopPropagation();
         contextMenuIndex = index;
         // 简单的边界检测，防止菜单超出屏幕
-        let top = e.clientY; 
+        let top = e.clientY;
         let left = e.clientX;
         // 考虑菜单本身的宽度和高度，避免菜单被截断
         const menuWidth = 120;
         const menuHeight = 80;
         if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 5;
         if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight - 5;
-        contextMenu.style.top = `${top}px`; 
+        contextMenu.style.top = `${top}px`;
         contextMenu.style.left = `${left}px`;
-        
-        contextMenu.classList.remove('hidden');
+
+        setContextMenuVisible(true);
+        // 焦点移到菜单首项，便于键盘用户操作
+        const firstItem = contextMenu.querySelector('.menu-item');
+        if (firstItem) firstItem.focus();
     }
-    
+
+    function hideContextMenu() {
+        setContextMenuVisible(false);
+    }
+
+    // Esc 关闭右键菜单 + 方向键导航
+    contextMenu.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            hideContextMenu();
+            return;
+        }
+        const items = Array.from(contextMenu.querySelectorAll('.menu-item'));
+        if (items.length === 0) return;
+        const currentIndex = items.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            const next = items[(currentIndex + 1) % items.length];
+            if (next) next.focus();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            const prev = items[(currentIndex - 1 + items.length) % items.length];
+            if (prev) prev.focus();
+        }
+    });
+
+    // 全局 Esc 兜底关闭菜单
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !contextMenu.classList.contains('hidden')) {
+            hideContextMenu();
+        }
+    });
+
     // 点击页面其他地方隐藏菜单
     document.addEventListener('click', (e) => {
         if (!contextMenu.contains(e.target)) {
-            contextMenu.classList.add('hidden');
+            setContextMenuVisible(false);
         }
     });
     
@@ -1211,15 +2041,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     
 
     
-    menuDelete.addEventListener('click', () => { 
+    function deleteContextShortcut() {
         if (contextMenuIndex > -1) { 
             shortcuts.splice(contextMenuIndex, 1); 
+            Storage.set('shortcuts', JSON.stringify(shortcuts));
             renderShortcuts(); 
-            contextMenu.classList.add('hidden');
+            setContextMenuVisible(false);
         } 
-    });
-    
-    menuEdit.addEventListener('click', () => {
+    }
+
+    function editContextShortcut() {
         if (contextMenuIndex > -1) {
             isEditing = true; 
             editIndex = contextMenuIndex;
@@ -1227,49 +2058,91 @@ document.addEventListener('DOMContentLoaded', async () => {
             urlInput.value = shortcuts[editIndex].url;
             // 填充图标URL（如果存在）
             iconInput.value = shortcuts[editIndex].icon || '';
+            // 未设置自定义图标时，用站点 favicon 作为预览回退，使预览与磁贴显示一致
+            if (shortcuts[editIndex].icon) {
+                iconPreviewFallback = null;
+            } else {
+                // 先用 _favicon 接口即时占位，再异步替换为磁贴所用的最佳 favicon（同源 chrome.storage.local）
+                iconPreviewFallback = buildFaviconPreviewUrl(shortcuts[editIndex].url);
+                const targetIndex = editIndex;
+                resolveFaviconPreview(shortcuts[editIndex].url).then(best => {
+                    // 仅当仍在编辑同一项且未填入自定义图标时，才用最佳 favicon 刷新预览
+                    if (best && isEditing && editIndex === targetIndex && !iconInput.value.trim()) {
+                        iconPreviewFallback = best;
+                        updateIconPreview();
+                    }
+                });
+            }
             editDialog.showModal();
-            contextMenu.classList.add('hidden');
+            // 对话框显示后再更新预览，确保已有图标的快捷方式能可靠加载并渲染出图标
+            updateIconPreview();
+            setContextMenuVisible(false);
         }
-    });
+    }
+
+    function handleMenuKeydown(action) {
+        return (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                action();
+            }
+        };
+    }
+
+    menuDelete.addEventListener('click', deleteContextShortcut);
+    menuDelete.addEventListener('keydown', handleMenuKeydown(deleteContextShortcut));
+    
+    menuEdit.addEventListener('click', editContextShortcut);
+    menuEdit.addEventListener('keydown', handleMenuKeydown(editContextShortcut));
     
     // 应用颜色模式
     async function applyColorMode(mode) {
-        // 移除所有颜色模式类
+        mode = sanitizeColorMode(mode);
         const body = document.body;
-        body.classList.remove('light-bg');
         
-        // 根据选择应用颜色模式
+        // 解析具体主题：自动模式根据背景亮度/系统偏好计算，手动模式直接使用指定值。
+        // 关键：不在异步检测前移除当前主题类，避免检测期间回退 :root 深色默认导致闪烁；
+        // 保持当前主题不动，检测完成后仅在结果不同时原子切换。
         let currentTheme;
-        switch (mode) {
-            case 'light':
-                currentTheme = 'light';
-                break;
-            case 'dark':
-                currentTheme = 'dark';
-                break;
-            case 'auto':
-            default:
-                // 恢复自动检测并获取当前主题
-                detectBackgroundColor();
-                // 从存储中获取检测到的主题
-                const themeInfo = await Storage.get('backgroundThemeInfo');
-                currentTheme = themeInfo ? JSON.parse(themeInfo).theme : 'dark';
-                break;
+        if (mode === 'auto') {
+            if (document.documentElement.classList.contains('has-custom-bg')) {
+                currentTheme = await detectBackgroundColor();
+            } else {
+                // 竞态保护：bgMode 为 bing/custom 但 has-custom-bg 类尚未添加时，
+                // 用上次权威检测结果而非系统偏好，避免覆盖正确的缓存主题
+                let bgModeNow;
+                try { bgModeNow = localStorage.getItem('_bgMode'); } catch(e) {}
+                if (bgModeNow === 'bing' || bgModeNow === 'custom') {
+                    let cached;
+                    try { cached = localStorage.getItem('_resolvedTheme'); } catch(e) {}
+                    currentTheme = (cached === 'light' || cached === 'dark') ? cached
+                        : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+                } else {
+                    currentTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                }
+            }
+        } else {
+            currentTheme = mode;
         }
+
+        // 原子切换：仅在结果与当前不同时修改类名
+        const targetClass = currentTheme === 'light' ? 'light-bg' : 'dark-bg';
+        const removeClass = currentTheme === 'light' ? 'dark-bg' : 'light-bg';
+        if (!body.classList.contains(targetClass)) {
+            body.classList.remove(removeClass);
+            body.classList.add(targetClass);
+        }
+
+        // 持久化实际主题，供下次首绘前立即应用
+        Storage.set('resolvedTheme', currentTheme);
+        try { localStorage.setItem('_resolvedTheme', currentTheme); } catch(e) {}
         
-        // 只更新快捷方式和搜索框的颜色类
         await updateTextColorClasses(currentTheme);
-        
-        // 更新对话框的颜色模式
-        await updateDialogColorMode(currentTheme);
     }
     
-    // 修复背景亮度检测函数
-    function detectBackgroundColor() {
-        // 移除之前可能添加的类
+    // 检测背景亮度并应用对应主题
+    async function detectBackgroundColor() {
         const body = document.body;
-        // 移除body上的light-bg类
-        body.classList.remove('light-bg');
         
         // 获取预加载背景元素
         const preloadBg = document.getElementById('preload-bg');
@@ -1293,99 +2166,102 @@ document.addEventListener('DOMContentLoaded', async () => {
         let bgUrl = null;
         if (urlMatch && urlMatch[1] && urlMatch[1] !== 'none') {
             bgUrl = urlMatch[1];
-            const img = new Image();
-            img.crossOrigin = 'Anonymous';
-            img.onload = function() {
-                try {
-                    const canvas = document.createElement('canvas');
-                    const ctx = canvas.getContext('2d');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    ctx.drawImage(img, 0, 0);
-                    
-                    const centerX = Math.floor(img.width / 2);
-                    const centerY = Math.floor(img.height / 2);
-                    const sampleWidth = Math.floor(img.width / 3);
-                    const sampleHeight = Math.floor(img.height / 3);
-                    const startX = centerX - Math.floor(sampleWidth / 2);
-                    const startY = centerY - Math.floor(sampleHeight / 2);
-                    
-                    const imageData = ctx.getImageData(startX, startY, sampleWidth, sampleHeight);
-                    const data = imageData.data;
-                    
-                    let totalBrightness = 0;
-                    let count = 0;
-                    for (let i = 0; i < data.length; i += 4) {
-                        const r = data[i];
-                        const g = data[i + 1];
-                        const b = data[i + 2];
-                        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-                        totalBrightness += brightness;
-                        count++;
+            return new Promise(resolve => {
+                const img = new Image();
+                img.crossOrigin = 'Anonymous';
+                img.onload = async function() {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        const sampleSize = 64;
+                        canvas.width = sampleSize;
+                        canvas.height = sampleSize;
+                        ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
+
+                        const imageData = ctx.getImageData(0, 0, sampleSize, sampleSize);
+                        const data = imageData.data;
+                        
+                        let totalBrightness = 0;
+                        let count = 0;
+                        for (let i = 0; i < data.length; i += 4) {
+                            const r = data[i];
+                            const g = data[i + 1];
+                            const b = data[i + 2];
+                            const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+                            totalBrightness += brightness;
+                            count++;
+                        }
+                        
+                        const averageBrightness = totalBrightness / count;
+                        
+                        if (averageBrightness > 128) {
+                            theme = 'light';
+                            body.classList.remove('dark-bg');
+                            body.classList.add('light-bg');
+                        } else {
+                            body.classList.remove('light-bg');
+                            body.classList.add('dark-bg');
+                        }
+                    } catch (e) {
+                        console.warn('无法分析背景图片亮度（可能受 CORS 限制），使用默认深色主题', e);
+                        body.classList.remove('light-bg');
+                        body.classList.add('dark-bg');
                     }
                     
-                    const averageBrightness = totalBrightness / count;
+                    const themeInfo = {
+                        theme: theme,
+                        bgUrl: bgUrl,
+                        systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+                    };
                     
-                    if (averageBrightness > 128) {
-                        theme = 'light';
-                    }
-                } catch (e) {
-                    console.warn('无法分析背景图片亮度（可能受 CORS 限制），使用默认深色主题', e);
-                }
-                
-                const themeInfo = {
-                    theme: theme,
-                    bgUrl: bgUrl,
-                    systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-                };
-                
-                (async function() {
                     await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
+                    await Storage.set('resolvedTheme', theme);
+                    try { localStorage.setItem('_resolvedTheme', theme); } catch(e) {}
                     await updateTextColorClasses(theme);
-                })();
-            };
-            img.onerror = function() {
-                console.warn('背景图片加载失败，使用默认深色主题');
-                const themeInfo = {
-                    theme: 'dark',
-                    bgUrl: null,
-                    systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+                    resolve(theme);
                 };
-                (async function() {
+                img.onerror = async function() {
+                    console.warn('背景图片加载失败，使用默认深色主题');
+                    body.classList.remove('light-bg');
+                    body.classList.add('dark-bg');
+                    const themeInfo = {
+                        theme: 'dark',
+                        bgUrl: null,
+                        systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+                    };
                     await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
+                    await Storage.set('resolvedTheme', 'dark');
+                    try { localStorage.setItem('_resolvedTheme', 'dark'); } catch(e) {}
                     await updateTextColorClasses('dark');
-                })();
-            };
-            img.src = urlMatch[1];
-        } else {
-            // 没有自定义背景图，使用默认背景色
-            const bgColor = window.getComputedStyle(body).backgroundColor;
-            const rgbMatch = bgColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-            if (rgbMatch) {
-                const r = parseInt(rgbMatch[1]);
-                const g = parseInt(rgbMatch[2]);
-                const b = parseInt(rgbMatch[3]);
-                const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-                
-                // 根据亮度设置主题
-                if (brightness > 128) {
-                    theme = 'light';
-                    // 不添加light-bg类，只更新文字和图标颜色
-                }
-                
-                // 存储主题信息和相关上下文
-                const themeInfo = {
-                    theme: theme,
-                    bgUrl: bgUrl,
-                    systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+                    resolve('dark');
                 };
-                
-                // 异步存储主题信息和更新颜色类
-                (async function() {
-                    await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
-                    await updateTextColorClasses(theme);
-                })();
+                img.src = urlMatch[1];
+            });
+        } else {
+            // 没有自定义背景图，根据系统主题或背景色亮度判断
+            const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+            
+            if (prefersLight) {
+                theme = 'light';
+                body.classList.remove('dark-bg');
+                body.classList.add('light-bg');
+            } else {
+                // 默认深色
+                body.classList.remove('light-bg');
+                body.classList.add('dark-bg');
             }
+            
+            const themeInfo = {
+                theme: theme,
+                bgUrl: null,
+                systemTheme: prefersLight ? 'light' : 'dark'
+            };
+            
+            await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
+            await Storage.set('resolvedTheme', theme);
+            try { localStorage.setItem('_resolvedTheme', theme); } catch(e) {}
+            await updateTextColorClasses(theme);
+            return theme;
         }
     }
     
@@ -1416,7 +2292,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 自动模式，从存储中获取主题
             const themeInfo = await Storage.get('backgroundThemeInfo');
             if (themeInfo) {
-                const parsedTheme = JSON.parse(themeInfo);
+                const parsedTheme = parseJsonSafe(themeInfo, { theme: 'dark' });
                 textColorClass = parsedTheme.theme === 'light' ? 'text-color-dark' : 'text-color-light';
                 iconColorClass = parsedTheme.theme === 'light' ? 'icon-color-dark' : 'icon-color-light';
                 shortcutColorClass = parsedTheme.theme === 'light' ? 'shortcut-color-dark' : 'shortcut-color-light';
@@ -1456,78 +2332,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-    // 确保在 DOM 加载完成后立即更新颜色类
-    setTimeout(async () => {
-        const savedColorMode = await Storage.get('colorMode', 'auto');
-        let currentTheme;
-                
-        if (savedColorMode === 'auto') {
-            // 对于自动模式，尝试从存储中获取主题信息
-            const themeInfo = await Storage.get('backgroundThemeInfo');
-            if (themeInfo) {
-                // 如果有预先计算的主题信息，使用它
-                currentTheme = JSON.parse(themeInfo).theme;
-            } else {
-                // 如果没有预先计算的主题信息，触发背景颜色检测
-                detectBackgroundColor();
-                // 默认使用深色主题，直到检测完成
-                currentTheme = 'dark';
-            }
-        } else {
-            // 对于固定模式，直接使用保存的颜色模式
-            currentTheme = savedColorMode;
-        }
-                
-        await updateTextColorClasses(currentTheme);
-        
-        // 确保在首次加载时也正确应用对话框颜色模式
-        await updateDialogColorMode(currentTheme);
-    }, 100);
+
     
-    // 更新对话框颜色模式
-    async function updateDialogColorMode(mode) {
+    // 更新对话框颜色模式：始终跟随浏览器系统主题，与玻璃组件的颜色模式独立
+    function applyDialogSystemTheme() {
         const dialogs = document.querySelectorAll('.glass-dialog');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         
-        // 移除所有颜色模式类
         dialogs.forEach(dialog => {
             dialog.classList.remove('light-bg', 'dark-mode');
+            dialog.classList.add(prefersDark ? 'dark-mode' : 'light-bg');
         });
-        
-        // 根据选择应用颜色模式
-        switch (mode) {
-            case 'light':
-                dialogs.forEach(dialog => {
-                    dialog.classList.add('light-bg');
-                });
-                break;
-            case 'dark':
-                dialogs.forEach(dialog => {
-                    dialog.classList.add('dark-mode');
-                });
-                break;
-            case 'auto':
-            default:
-                // 自动模式，从存储中获取主题
-                const themeInfo = await Storage.get('backgroundThemeInfo');
-                if (themeInfo) {
-                    const parsedTheme = JSON.parse(themeInfo);
-                    if (parsedTheme.theme === 'light') {
-                        dialogs.forEach(dialog => {
-                            dialog.classList.add('light-bg');
-                        });
-                    } else {
-                        dialogs.forEach(dialog => {
-                            dialog.classList.add('dark-mode');
-                        });
-                    }
-                } else {
-                    // 默认为深色模式
-                    dialogs.forEach(dialog => {
-                        dialog.classList.add('dark-mode');
-                    });
-                }
-                break;
-        }
     }
     
     initDragAndDrop();

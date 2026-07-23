@@ -2,151 +2,314 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>New Tab</title>
     <link rel="stylesheet" href="style.css">
+    <script>
+        // 同步读取上次计算的主题并立即应用，避免首次绘制时闪现默认深色
+        (function() {
+            try {
+                var mode = localStorage.getItem('_colorMode') || 'auto';
+                var t;
+                if (mode === 'light' || mode === 'dark') {
+                    t = mode;
+                } else {
+                    // 自动模式：用上次权威计算结果，缺失时回退系统偏好
+                    t = localStorage.getItem('_resolvedTheme')
+                        || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+                }
+                if (t === 'light' || t === 'dark') {
+                    document.documentElement.classList.add('theme-' + t);
+                }
+            } catch(e) {}
+        })();
+    </script>
     <style>
         /* 预加载背景图片，加载完成后渐变显示 */
         .preloaded-bg {
             background-size: cover;
             background-position: center;
             background-repeat: no-repeat;
-            opacity: 0; /* 初始隐藏 */
-            transition: opacity 0s ease; /* 移除过渡效果 */
-        }
-        
-        /* 浏览器浅色模式下，默认使用深色文字 */
-        @media (prefers-color-scheme: light) {
-            .search-capsule input,
-            .engine-label,
-            .engine-option span,
-            .shortcut-item span {
-                color: #333 !important;
-            }
-            
-            .search-capsule input::placeholder {
-                color: rgba(0, 0, 0, 0.5) !important;
-            }
-            
-            .divider {
-                background: rgba(0,0,0,0.2) !important;
-            }
-            
-            .search-capsule button,
-            .settings-btn,
-            .add-btn {
-                color: #333 !important;
-            }
+            opacity: 0;
+            transition: opacity 0s ease;
         }
     </style>
 </head>
 <body>
-    <div class="blobs-container" id="blobs-layer">
+    <!-- 渐变背景层 - 定向光与暗角，为毛玻璃效果提供明暗层次 -->
+    <div class="bg-gradient" id="bg-gradient" aria-hidden="true"></div>
+
+    <!-- 动态背景 Blob 层 - 蓝/粉/紫三球物理碰撞 -->
+    <div class="blobs-container" id="blobs-layer" aria-hidden="true">
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
         <div class="blob blob-3"></div>
     </div>
     
-    <svg style="position: absolute; width: 0; height: 0;" xmlns="http://www.w3.org/2000/svg">
-        <filter id="frosted" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="10" />
-        </filter>
+    <!-- SVG 滤镜定义：iOS26 液態玻璃（Liquid Glass）核心 -->
+    <svg style="position: absolute; width: 0; height: 0; left: -9999px; top: -9999px;" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+            <filter id="frosted" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur in="SourceGraphic" stdDeviation="10" />
+            </filter>
+            <!-- 液態玻璃濾鏡：碎形雜訊 → 平滑 → 位移扭曲。
+                 核心防漏光設計：feMorphology+feGaussianBlur 生成「邊緣衰減遮罩」，
+                 經 feComponentTransfer 居中後與位移圖相乘，使位移在玻璃邊緣平滑歸零——
+                 玻璃內的折射背景與玻璃外未濾鏡背景在邊界處無縫銜接，
+                 重合成（如右鍵菜單彈出）或裁剪方式變化時不再泄漏亮條/分層。
+                 濾鏡區域嚴格等於元素邊界（0%/100%），edgeMode="duplicate" 防止噪聲邊緣衰減偏置。
+                 防斑點優化：提高位移圖模糊半徑消除高頻雜訊、降低位移縮放避免深色背景拉入亮像素、
+                 修正 feComposite k2=0 確保邊緣位移嚴格歸零、位移後追加輕模糊平滑折射紋理 -->
+            <filter id="liquid_glass_filter" x="0%" y="0%" width="100%" height="100%">
+                <feTurbulence type="fractalNoise" baseFrequency="0.0025" numOctaves="2" seed="7" result="noise"/>
+                <feGaussianBlur in="noise" stdDeviation="3.2" result="map" edgeMode="duplicate"/>
+                <!-- 邊緣衰減遮罩：腐蝕 4px 再模糊 5px，邊界處 alpha 平滑降至 0 -->
+                <feMorphology in="SourceAlpha" operator="erode" radius="4" result="eroded"/>
+                <feGaussianBlur in="eroded" stdDeviation="5" result="fadeMask"/>
+                <!-- 位移圖居中（中性值 0.5→0）並乘以衰減遮罩：邊緣位移嚴格歸零（k2=0），內部保持全強度折射 -->
+                <feComponentTransfer in="map" result="mapCentered">
+                    <feFuncR type="linear" slope="1" intercept="-0.5"/>
+                    <feFuncG type="linear" slope="1" intercept="-0.5"/>
+                </feComponentTransfer>
+                <feComposite in="mapCentered" in2="fadeMask" operator="arithmetic" k1="1" k2="0" k3="0" k4="0" result="mapFaded"/>
+                <feDisplacementMap in="SourceGraphic" in2="mapFaded" scale="16" xChannelSelector="R" yChannelSelector="G" result="displaced"/>
+                <!-- 位移後輕模糊：消除深色背景上因像素取樣產生的細碎斑點 -->
+                <feGaussianBlur in="displaced" stdDeviation="0.4" result="smoothed"/>
+                <feComposite in="smoothed" in2="SourceAlpha" operator="in"/>
+            </filter>
+        </defs>
     </svg>
 
-    <div class="settings-btn glass-element icon-hover" id="settings-trigger">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+    <!-- 设置按钮 -->
+    <button 
+        class="settings-btn glass-element icon-hover" 
+        id="settings-trigger"
+        aria-label="打开设置"
+        title="设置"
+        type="button"
+    >
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
         </svg>
-    </div>
+    </button>
 
-    <div class="main-layout">
-        <div class="search-wrapper">
+    <!-- 主布局 -->
+    <main class="main-layout" role="main">
+        <!-- 搜索区域 -->
+        <section class="search-wrapper" aria-label="搜索">
             <div class="search-capsule glass-element">
-                <input type="text" id="search-input" placeholder="" autocomplete="off">
-                <button id="search-btn" class="icon-hover">
-                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input 
+                    type="text" 
+                    id="search-input" 
+                    autocomplete="off"
+                    aria-label="搜索关键词"
+                    enterkeyhint="search"
+                >
+                <button 
+                    id="search-btn" 
+                    class="icon-hover"
+                    aria-label="搜索"
+                    type="button"
+                >
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
                 </button>
             </div>
+        </section>
 
-        </div>
+        <!-- 快捷方式网格 -->
+        <section class="shortcuts-section" aria-label="快捷方式">
+            <div class="grid-container" id="shortcuts-grid" role="list"></div>
+        </section>
 
-        <div class="grid-container" id="shortcuts-grid">
+        <!-- 添加快捷方式按钮 -->
+        <button 
+            class="add-btn glass-element icon-hover" 
+            id="add-shortcut-btn"
+            aria-label="添加快捷方式"
+            title="添加快捷方式"
+            type="button"
+        >
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+        </button>
+    </main>
+
+    <!-- 编辑快捷方式对话框 -->
+    <dialog id="edit-dialog" class="glass-dialog" aria-labelledby="edit-dialog-title">
+        <h3 class="dialog-title" id="edit-dialog-title">编辑快捷方式</h3>
+        <form method="dialog" id="edit-form">
+            <div class="form-group">
+                <label for="shortcut-name" class="form-label">名称</label>
+                <input 
+                    type="text" 
+                    id="shortcut-name" 
+                    placeholder="名称" 
+                    class="glass-input"
+                    aria-required="true"
+                    required
+                >
             </div>
-
-        <div class="add-btn glass-element icon-hover" id="add-shortcut-btn">
-            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-        </div>
-    </div>
-
-    <dialog id="edit-dialog" class="glass-dialog">
-        <h3 class="dialog-title">编辑快捷方式</h3>
-        <input type="text" id="shortcut-name" placeholder="名称" class="glass-input">
-        <input type="text" id="shortcut-url" placeholder="网址" class="glass-input">
-        <input type="text" id="shortcut-icon" placeholder="图标 URL (可选)" class="glass-input">
-        <div class="icon-button-container">
-            <button id="refresh-icon-btn" class="glass-btn">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M23 4v6h-6"></path>
-                    <path d="M1 20v-6h6"></path>
-                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                </svg>
-                <span>重新获取图标</span>
-            </button>
-            <label for="shortcut-icon-upload" class="glass-btn">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                    <polyline points="17 8 12 3 7 8"></polyline>
-                    <line x1="12" y1="3" x2="12" y2="15"></line>
-                </svg>
-                <span>上传图标</span>
-            </label>
-            <input type="file" id="shortcut-icon-upload" accept="image/*" hidden>
-        </div>
-        <div class="dialog-actions">
-            <button id="cancel-btn" class="glass-btn">取消</button>
-            <button id="save-btn" class="glass-btn primary">保存</button>
-        </div>
+            <div class="form-group">
+                <label for="shortcut-url" class="form-label">网址</label>
+                <input 
+                    type="text" 
+                    id="shortcut-url" 
+                    placeholder="网址" 
+                    class="glass-input"
+                    aria-required="true"
+                    inputmode="url"
+                    required
+                >
+            </div>
+            <div class="form-group">
+                <label for="shortcut-icon" class="form-label">图标 URL (可选)</label>
+                <div class="icon-editor">
+                    <div class="icon-preview" id="shortcut-icon-preview">
+                        <img id="shortcut-icon-preview-img" alt="" aria-hidden="true">
+                        <svg class="icon-placeholder" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                            <rect x="3" y="3" width="18" height="18" rx="4"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <path d="M21 15l-5-5L5 21"></path>
+                        </svg>
+                        <span id="shortcut-icon-preview-text" class="visually-hidden" aria-live="polite">自动获取网站图标</span>
+                    </div>
+                    <div class="icon-editor-controls">
+                        <div class="icon-url-input-wrap">
+                            <input 
+                                type="text" 
+                                id="shortcut-icon" 
+                                placeholder="粘贴图标 URL，或上传 / 自动获取" 
+                                class="glass-input icon-url-input"
+                                inputmode="url"
+                            >
+                            <button id="clear-icon-btn" class="icon-url-clear" type="button" aria-label="清除图标 URL" title="清除图标">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="icon-editor-actions">
+                            <button id="refresh-icon-btn" class="glass-btn compact" type="button">
+                                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <path d="M23 4v6h-6"></path>
+                                    <path d="M1 20v-6h6"></path>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                </svg>
+                                <span>重新获取图标</span>
+                            </button>
+                            <label for="shortcut-icon-upload" class="glass-btn compact">
+                                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                <span>上传图标</span>
+                            </label>
+                            <input type="file" id="shortcut-icon-upload" accept="image/*,.ico" hidden>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="dialog-actions">
+                <button id="cancel-btn" class="glass-btn" type="button">取消</button>
+                <button id="save-btn" class="glass-btn primary" type="submit">保存</button>
+            </div>
+        </form>
     </dialog>
 
-    <dialog id="settings-dialog" class="glass-dialog settings-modal">
-        <h3 class="dialog-title">设置</h3>
+    <!-- 设置对话框 -->
+    <dialog id="settings-dialog" class="glass-dialog settings-modal" aria-labelledby="settings-dialog-title">
+        <h3 class="dialog-title" id="settings-dialog-title">设置</h3>
         
         <div class="settings-content">
-            <div class="settings-section layout-settings">
-                <h4>布局</h4>
-                <div class="setting-group">
-                    <label class="setting-label">
-                        <span class="setting-name">列数 <span class="setting-value" id="col-val">5</span></span>
-                        <input type="range" class="setting-slider" id="setting-cols" min="3" max="10" step="1" value="5">
-                    </label>
-                </div>
-                <div class="setting-group">
-                    <label class="setting-label">
-                        <span class="setting-name">图标大小</span>
-                        <input type="range" class="setting-slider" id="setting-size" min="80" max="160" step="10" value="100">
-                    </label>
-                </div>
-                <div class="setting-group">
-                    <label class="setting-label">
-                        <span class="setting-name">显示比例 <span class="setting-value" id="scale-val">100%</span></span>
-                        <input type="range" class="setting-slider" id="setting-scale" min="50" max="200" step="5" value="100">
-                    </label>
-                </div>
+            <div class="settings-tabs" role="tablist" aria-label="设置分类">
+                <button class="settings-tab active" id="settings-tab-layout" data-settings-tab="layout" role="tab" aria-selected="true" aria-controls="settings-panel-layout" type="button">布局</button>
+                <button class="settings-tab" id="settings-tab-appearance" data-settings-tab="appearance" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" type="button">外观</button>
+                <button class="settings-tab" id="settings-tab-data" data-settings-tab="data" role="tab" aria-selected="false" aria-controls="settings-panel-data" type="button">数据</button>
             </div>
+
+            <!-- 布局设置 -->
+            <section class="settings-section settings-panel layout-settings active" id="settings-panel-layout" data-settings-panel="layout" role="tabpanel" aria-labelledby="settings-tab-layout">
+                <h4 id="layout-heading">布局</h4>
+                <div class="setting-group">
+                    <label class="setting-label" for="setting-cols">
+                        <span class="setting-name">列数 <span class="setting-value" id="col-val">5</span></span>
+                    </label>
+                    <input 
+                        type="range" 
+                        class="setting-slider" 
+                        id="setting-cols" 
+                        min="3" 
+                        max="10" 
+                        step="1" 
+                        value="5"
+                        aria-valuemin="3"
+                        aria-valuemax="10"
+                        aria-valuenow="5"
+                        aria-label="快捷方式列数"
+                    >
+                </div>
+                <div class="setting-group">
+                    <label class="setting-label" for="setting-size">
+                        <span class="setting-name">图标大小</span>
+                    </label>
+                    <input 
+                        type="range" 
+                        class="setting-slider" 
+                        id="setting-size" 
+                        min="80" 
+                        max="160" 
+                        step="10" 
+                        value="100"
+                        aria-valuemin="80"
+                        aria-valuemax="160"
+                        aria-valuenow="100"
+                        aria-label="图标大小"
+                    >
+                </div>
+                <div class="setting-group">
+                    <label class="setting-label" for="setting-scale">
+                        <span class="setting-name">显示比例 <span class="setting-value" id="scale-val">100%</span></span>
+                    </label>
+                    <input 
+                        type="range" 
+                        class="setting-slider" 
+                        id="setting-scale" 
+                        min="50" 
+                        max="200" 
+                        step="5" 
+                        value="100"
+                        aria-valuemin="50"
+                        aria-valuemax="200"
+                        aria-valuenow="100"
+                        aria-label="显示比例"
+                    >
+                </div>
+            </section>
             
-            <div class="settings-section">
-                <h4>颜色模式</h4>
-                <div class="color-mode-buttons">
-                    <button class="glass-btn active" data-mode="auto">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <!-- 颜色模式 -->
+            <section class="settings-section settings-panel" id="settings-panel-appearance" data-settings-panel="appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" hidden>
+                <h4 id="color-mode-heading">颜色模式</h4>
+                <div class="color-mode-buttons" role="radiogroup" aria-label="颜色模式选择">
+                    <button class="glass-btn active" data-mode="auto" role="radio" aria-checked="true" type="button">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <circle cx="12" cy="12" r="10"></circle>
                             <line x1="2" y1="12" x2="22" y2="12"></line>
                             <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
                         </svg>
                         <span>自动</span>
                     </button>
-                    <button class="glass-btn" data-mode="light">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <button class="glass-btn" data-mode="light" role="radio" aria-checked="false" type="button">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <circle cx="12" cy="12" r="5"></circle>
                             <line x1="12" y1="1" x2="12" y2="3"></line>
                             <line x1="12" y1="21" x2="12" y2="23"></line>
@@ -159,45 +322,119 @@
                         </svg>
                         <span>浅色</span>
                     </button>
-                    <button class="glass-btn" data-mode="dark">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <button class="glass-btn" data-mode="dark" role="radio" aria-checked="false" type="button">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                         </svg>
                         <span>深色</span>
                     </button>
                 </div>
-            </div>
 
-            <div class="settings-section">
-                <h4>背景</h4>
-                <div class="settings-buttons bg-options">
-                    <button id="bg-bing-btn" class="settings-button glass-btn">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                            <circle cx="8.5" cy="8.5" r="1.5"/>
-                            <polyline points="21 15 16 10 5 21"/>
-                        </svg>
-                        <span class="btn-text">随机必应壁纸</span>
-                        <span class="btn-loader">
-                            <span class="loader-dot"></span>
-                            <span class="loader-dot"></span>
-                            <span class="loader-dot"></span>
-                        </span>
-                    </button>
-                    <label for="bg-upload-input" class="settings-button glass-btn">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        <span class="btn-text">上传图片</span>
-                        <input type="file" id="bg-upload-input" accept="image/*" hidden>
-                    </label>
+                <!-- 背景设置 -->
+                <h4 id="bg-heading">背景</h4>
+                <div class="bg-settings">
+                    <!-- 背景模式切换 -->
+                    <div class="bg-mode-segmented" role="radiogroup" aria-label="背景模式">
+                        <button class="seg-btn active" data-bg-mode="default" role="radio" aria-checked="true" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                                <circle cx="9.5" cy="9.5" r="5.5"/>
+                                <circle cx="14.5" cy="14.5" r="5.5"/>
+                            </svg>
+                            <span>默认动态</span>
+                        </button>
+                        <button class="seg-btn" data-bg-mode="bing" role="radio" aria-checked="false" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                <circle cx="8.5" cy="8.5" r="1.5"/>
+                                <polyline points="21 15 16 10 5 21"/>
+                            </svg>
+                            <span>必应壁纸</span>
+                        </button>
+                        <button class="seg-btn" data-bg-mode="custom" role="radio" aria-checked="false" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                <line x1="12" y1="8" x2="12" y2="16"/>
+                                <line x1="8" y1="12" x2="16" y2="12"/>
+                            </svg>
+                            <span>自定义</span>
+                        </button>
+                    </div>
+
+                    <!-- 必应壁纸子面板 -->
+                    <div class="bg-subpanel" data-bg-subpanel="bing" hidden>
+                        <div class="bg-subpanel-row">
+                            <span class="bg-subpanel-label">壁纸</span>
+                            <button id="bing-refresh-btn" class="wall-refresh" type="button" aria-label="换一张壁纸" title="换一张">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <path d="M23 4v6h-6"/>
+                                    <path d="M1 20v-6h6"/>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                                </svg>
+                                <span class="btn-loader" aria-hidden="true">
+                                    <span class="loader-dot"></span>
+                                    <span class="loader-dot"></span>
+                                    <span class="loader-dot"></span>
+                                </span>
+                            </button>
+                        </div>
+                        <div class="bg-subpanel-row">
+                            <span class="bg-subpanel-label">画质</span>
+                            <div class="bg-quality-segmented" role="radiogroup" aria-label="壁纸画质">
+                                <button class="seg-btn small active" data-bing-quality="uhd" role="radio" aria-checked="true" type="button">4K 超清</button>
+                                <button class="seg-btn small" data-bing-quality="hd" role="radio" aria-checked="false" type="button">1080P 高清</button>
+                            </div>
+                        </div>
+                        <div class="bg-subpanel-row">
+                            <label class="bg-subpanel-label" for="bing-interval-select">自动更换</label>
+                            <select id="bing-interval-select" class="glass-select">
+                                <option value="43200000">每 12 小时</option>
+                                <option value="86400000">每天</option>
+                                <option value="259200000">每 3 天</option>
+                                <option value="604800000">每周</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- 自定义背景子面板 -->
+                    <div class="bg-subpanel" data-bg-subpanel="custom" hidden>
+                        <div class="wall-preview" id="custom-preview">
+                            <div class="wall-preview-empty">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                                <span>未上传图片</span>
+                            </div>
+                        </div>
+                        <div class="bg-custom-actions">
+                            <label for="bg-upload-input" class="glass-btn compact">
+                                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                                <span>上传图片</span>
+                                <input type="file" id="bg-upload-input" accept="image/*" hidden>
+                            </label>
+                            <button id="bg-remove-btn" class="glass-btn compact danger" type="button">
+                                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <polyline points="3 6 5 6 21 6"/>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                </svg>
+                                <span>移除</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <button id="bg-reset-btn" class="glass-btn full-width danger">恢复默认背景</button>
-            </div>
+            </section>
 
-            <div class="settings-section">
-                <h4>数据管理</h4>
+            <!-- 数据管理 -->
+            <section class="settings-section settings-panel" id="settings-panel-data" data-settings-panel="data" role="tabpanel" aria-labelledby="settings-tab-data" hidden>
+                <h4 id="data-heading">数据管理</h4>
                 <div class="settings-buttons data-management">
-                    <button id="export-data-btn" class="settings-button glass-btn">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <button id="export-data-btn" class="settings-button glass-btn" type="button">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                             <polyline points="7 10 12 15 17 10"></polyline>
                             <line x1="12" y1="15" x2="12" y2="3"></line>
@@ -205,7 +442,7 @@
                         <span>导出数据</span>
                     </button>
                     <label for="import-data-input" class="settings-button glass-btn">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                             <polyline points="17 8 12 3 7 8"></polyline>
                             <line x1="12" y1="3" x2="12" y2="15"></line>
@@ -214,20 +451,22 @@
                         <input type="file" id="import-data-input" accept=".json" hidden>
                     </label>
                 </div>
-            </div>
+            </section>
 
             <div class="dialog-actions">
-                <button id="settings-close" class="glass-btn">关闭</button>
+                <button id="settings-close" class="glass-btn" type="button">关闭</button>
             </div>
         </div>
     </dialog>
 
-    <div id="context-menu" class="context-menu glass-element hidden">
-        <div class="menu-item" id="menu-edit">编辑</div>
-        <div class="menu-item delete" id="menu-delete">删除</div>
+    <!-- 右键菜单 -->
+    <div id="context-menu" class="context-menu glass-element hidden" role="menu" aria-hidden="true">
+        <div class="menu-item" id="menu-edit" role="menuitem" tabindex="0">编辑</div>
+        <div class="menu-item delete" id="menu-delete" role="menuitem" tabindex="0">删除</div>
     </div>
 
-    <div id="toast-container" class="toast-container"></div>
+    <!-- Toast 容器 -->
+    <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 
     <script src="script.js"></script>
 </body>

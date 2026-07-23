@@ -27,11 +27,17 @@
 
 ## 文件说明
 
-- [manifest.json](file://e:\Projects\Liquid%20Newtab\manifest.json) - 扩展配置文件
-- [newtab.html](file://e:\Projects\Liquid%20Newtab\newtab.html) - 新标签页主界面
-- [style.css](file://e:\Projects\Liquid%20Newtab\style.css) - 页面样式文件
-- [script.js](file://e:\Projects\Liquid%20Newtab\script.js) - 前端交互逻辑
-- [background.js](file://e:\Projects\Liquid%20Newtab\background.js) - 后台运行脚本
+- [manifest.json](manifest.json) - 扩展配置文件
+- [newtab.html](newtab.html) - 新标签页主界面
+- [style.css](style.css) - 页面样式文件
+- [script.js](script.js) - 前端交互逻辑
+- [background.js](background.js) - 后台运行脚本
+
+## 外部服务说明
+
+- 自动获取网站图标时，会向 Google、DuckDuckGo 或 icon.horse 查询对应域名的 favicon。
+- 使用随机必应壁纸功能时，会请求 `api.bimg.cc` 获取远程图片。
+- 上传的本地背景和图标仅保存在浏览器本地扩展存储中。
 
 ## 使用方法
 

@@ -7,7 +7,7 @@ const FAVICON_SOURCES = [
                 client: 'SOCIAL',
                 type: 'FAVICON',
                 fallback_opts: 'TYPE,SIZE,URL',
-                url: url,
+                url: getDomainUrl(url),
                 size: '256'
             });
             return `https://t1.gstatic.com/faviconV2?${params}`;
@@ -17,7 +17,7 @@ const FAVICON_SOURCES = [
         name: 'duckduckgo',
         priority: 4,
         getUrl: (url) => {
-            const domain = new URL(url).hostname;
+            const domain = encodeURIComponent(new URL(url).hostname);
             return `https://icons.duckduckgo.com/ip3/${domain}.ico`;
         }
     },
@@ -25,7 +25,7 @@ const FAVICON_SOURCES = [
         name: 'googleS2',
         priority: 2,
         getUrl: (url) => {
-            const domain = new URL(url).hostname;
+            const domain = encodeURIComponent(new URL(url).hostname);
             return `https://www.google.com/s2/favicons?domain=${domain}&sz=256`;
         }
     },
@@ -33,7 +33,7 @@ const FAVICON_SOURCES = [
         name: 'iconHorse',
         priority: 1,
         getUrl: (url) => {
-            const domain = new URL(url).hostname;
+            const domain = encodeURIComponent(new URL(url).hostname);
             return `https://icon.horse/icon/${domain}`;
         }
     }
@@ -41,18 +41,41 @@ const FAVICON_SOURCES = [
 
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 const SOURCE_TIMEOUT = 3000;
+const MAX_FAVICON_BLOB_BYTES = 128 * 1024;
+const MAX_FAVICON_CACHE_ENTRIES = 80;
+const ALLOWED_PAGE_PROTOCOLS = new Set(['http:', 'https:']);
+
+function normalizePageUrl(value) {
+    if (typeof value !== 'string') return null;
+    try {
+        const url = new URL(value);
+        if (!ALLOWED_PAGE_PROTOCOLS.has(url.protocol) || !url.hostname) return null;
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
+
+function getDomainUrl(value) {
+    const url = new URL(value);
+    return `${url.protocol}//${url.hostname}/`;
+}
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'performSearch') {
+        if (typeof request.text !== 'string' || !request.text.trim()) {
+            return false;
+        }
+
         try {
             chrome.search.query({
-                text: request.text,
+                text: request.text.trim(),
                 disposition: 'CURRENT_TAB'
             });
         } catch (e) {
             console.error("Search failed:", e);
         }
-        return true;
+        return false;
     }
 
     if (request.action === 'getBestFavicon') {
@@ -63,12 +86,83 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
         return true;
     }
+
+    if (request.action === 'fetchWallpaper') {
+        console.log('[BG] fetchWallpaper 收到请求:', request.url);
+        handleFetchWallpaper(request.url, request.timeoutMs || 60000)
+            .then((result) => {
+                console.log('[BG] fetchWallpaper 成功, dataUrl 长度:', result.dataUrl ? result.dataUrl.length : 0);
+                sendResponse(result);
+            })
+            .catch((error) => {
+                console.error('[BG] fetchWallpaper 失败:', error);
+                sendResponse({ success: false, error: error.message || 'fetch failed' });
+            });
+        return true;
+    }
+
+    if (request.action === 'fetchJson') {
+        console.log('[BG] fetchJson 收到请求:', request.url);
+        handleFetchJson(request.url, request.timeoutMs || 30000)
+            .then((data) => {
+                console.log('[BG] fetchJson 成功, type:', data.type);
+                sendResponse({ success: true, data });
+            })
+            .catch((error) => {
+                console.error('[BG] fetchJson 失败:', error);
+                sendResponse({ success: false, error: error.message || 'fetch failed' });
+            });
+        return true;
+    }
 });
 
+async function handleFetchWallpaper(url, timeoutMs) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const blob = await response.blob();
+        if (blob.type && blob.type !== 'application/octet-stream' && !blob.type.startsWith('image/')) {
+            throw new Error('远程资源不是图片');
+        }
+        const dataUrl = await blobToDataUrl(blob);
+        return { success: true, dataUrl };
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+async function handleFetchJson(url, timeoutMs) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, {
+            signal: controller.signal,
+            redirect: 'follow'
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const text = await response.text();
+        // 尝试解析为 JSON；若失败则返回原始文本（可能是 XML），由调用端处理
+        try {
+            return { type: 'json', data: JSON.parse(text) };
+        } catch {
+            return { type: 'text', data: text };
+        }
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
 async function handleGetBestFavicon(pageUrl, forceRefresh) {
+    const normalizedUrl = normalizePageUrl(pageUrl);
+    if (!normalizedUrl) {
+        return { dataUrl: null, useChromeApi: true };
+    }
+
     let domain;
     try {
-        domain = new URL(pageUrl).hostname;
+        domain = new URL(normalizedUrl).hostname;
     } catch {
         return { dataUrl: null, useChromeApi: true };
     }
@@ -91,7 +185,7 @@ async function handleGetBestFavicon(pageUrl, forceRefresh) {
         } catch {}
     }
 
-    const results = await fetchAllSources(pageUrl);
+    const results = await fetchAllSources(normalizedUrl);
 
     let bestResult = null;
     let bestScore = -1;
@@ -122,6 +216,8 @@ async function handleGetBestFavicon(pageUrl, forceRefresh) {
                 height: bestResult.height
             }
         });
+        prunePendingWrites++;
+        await pruneFaviconCache();
     } catch {}
 
     return { dataUrl, fromCache: false };
@@ -134,16 +230,20 @@ async function fetchAllSources(pageUrl) {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), SOURCE_TIMEOUT);
 
-            const response = await fetch(url, {
-                signal: controller.signal,
-                redirect: 'follow'
-            });
-            clearTimeout(timeoutId);
+            let response;
+            try {
+                response = await fetch(url, {
+                    signal: controller.signal,
+                    redirect: 'follow'
+                });
+            } finally {
+                clearTimeout(timeoutId);
+            }
 
             if (!response.ok) return { success: false };
 
             const blob = await response.blob();
-            if (blob.size < 50) return { success: false };
+            if (blob.size < 50 || blob.size > MAX_FAVICON_BLOB_BYTES) return { success: false };
 
             let dims;
             try {
@@ -171,6 +271,39 @@ async function fetchAllSources(pageUrl) {
         .filter(r => r.status === 'fulfilled')
         .map(r => r.value)
         .filter(r => r.success);
+}
+
+// 简单的频率限制：缓存写入计数与时间双触发，避免每次写都 get(null) 把数 MB 的 customBg 也读进 SW
+let prunePendingWrites = 0;
+let lastPruneTime = 0;
+const PRUNE_WRITE_THRESHOLD = 5;
+const PRUNE_TIME_THRESHOLD = 10 * 60 * 1000; // 10 分钟
+
+async function pruneFaviconCache(force = false) {
+    const now = Date.now();
+    if (!force) {
+        if (prunePendingWrites < PRUNE_WRITE_THRESHOLD &&
+            now - lastPruneTime < PRUNE_TIME_THRESHOLD) {
+            return;
+        }
+    }
+    prunePendingWrites = 0;
+    lastPruneTime = now;
+
+    const items = await chrome.storage.local.get(null);
+    const faviconEntries = Object.entries(items)
+        .filter(([key, value]) => key.startsWith('favicon_') && value && typeof value === 'object')
+        .sort((a, b) => Number(b[1].timestamp || 0) - Number(a[1].timestamp || 0));
+
+    if (faviconEntries.length <= MAX_FAVICON_CACHE_ENTRIES) return;
+
+    const keysToRemove = faviconEntries
+        .slice(MAX_FAVICON_CACHE_ENTRIES)
+        .map(([key]) => key);
+
+    if (keysToRemove.length > 0) {
+        await chrome.storage.local.remove(keysToRemove);
+    }
 }
 
 async function getImageDimensions(blob) {

@@ -1,1044 +1,1851 @@
-﻿:root {
-    /* 动态变量 */
-    --col-count: 5;
-    --item-size: 110px;
-    --bg-image: none; /* 用于存储背景图URL */
-    --scale: 1; /* 显示比例 */
-    
-    /* 玻璃质感参数 */
-    --glass-bg: rgba(255, 255, 255, 0.1);
-    --glass-border: rgba(255, 255, 255, 0.3);
-    --glass-highlight: rgba(255, 255, 255, 0.15);
-    --shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25);
-    --text-color: #ffffff;
-    --text-primary: #ffffff;
-    --text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+/* ============================================
+   Liquid Newtab - Design System
+   ============================================ */
 
-    /* 深色模式胶囊变量（默认） */
-    --capsule-bg: rgba(255, 255, 255, 0.08);
-    --capsule-border: rgba(255, 255, 255, 0.18);
-    --capsule-divider: rgba(255, 255, 255, 0.08);
-    --capsule-hover: rgba(255, 255, 255, 0.15);
+/* ------------------------------------------
+   1. Design Tokens (CSS Custom Properties)
+   ------------------------------------------ */
+:root {
+  /* Dynamic Variables */
+  --col-count: 5;
+  --item-size: 110px;
+  --active-col-count: 5;
+  --search-width: 580px;
+  --bg-image: none;
+  --scale: 1;
+  /* 液態玻璃：輕模糊 + SVG 位移濾鏡，背景柔和透出並自然晃動 */
+  --liquid-blur: 3px;
+  /* 半透明填充（文章 rgba(255,255,255,0.1)） */
+  --liquid-fill: rgba(255, 255, 255, 0.1);
+  --liquid-fill-hover: rgba(255, 255, 255, 0.16);
+  --liquid-fill-strong: rgba(255, 255, 255, 0.16);
+  /* 文章明確不用 border：邊緣厚度完全由多層 inset 陰影表達 */
+  --liquid-stroke: transparent;
+  --liquid-highlight: rgba(255, 255, 255, 0.86);
+  /* 柔和邊緣反光：低透明度 + 1px 模糊的柔光，避免生硬白線形成框感 */
+  --liquid-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  --liquid-inner-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.16),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.04),
+    inset 3px 3px 12px rgba(255, 255, 255, 0.03);
+  /* backdrop-filter 統一值（含 SVG 位移濾鏡）與 Safari 回退值 */
+  --liquid-backdrop: blur(var(--liquid-blur)) url(#liquid_glass_filter);
+  --liquid-backdrop-fallback: blur(var(--liquid-blur));
+
+  /* Animation Tokens */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-cubic: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --ease-in-cubic: cubic-bezier(0.7, 0, 0.84, 0);
+  --duration-fast: 0.15s;
+  --duration-normal: 0.25s;
+  --duration-slow: 0.35s;
+
+  /* Spacing Tokens (8px grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Typography Tokens */
+  --font-family-base: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-size-xs: 12px;
+  --font-size-sm: 13px;
+  --font-size-base: 14px;
+  --font-size-md: 16px;
+  --font-size-lg: 18px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+
+  /* Radius Tokens */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+
+  /* Shadow Tokens */
+  --shadow-glass: 0 8px 18px rgba(0, 0, 0, 0.12);
+  --shadow-glass-hover: 0 10px 22px rgba(0, 0, 0, 0.16);
+  --shadow-float: 0 8px 20px rgba(0, 0, 0, 0.22);
+  --shadow-dialog: 0 12px 28px rgba(0, 0, 0, 0.18);
+  --shadow-toast: 0 6px 16px rgba(0, 0, 0, 0.16);
+  --shadow-text: 0 2px 4px rgba(0, 0, 0, 0.5);
+  --shadow-text-light: 0 1px 3px rgba(0, 0, 0, 0.3);
+
+  /* Backdrop Blur Tokens */
+  --blur-sm: 4px;
+  --blur-md: 14px;
+  --blur-lg: 18px;
+  --blur-xl: 24px;
+
+  /* Color Tokens - Auto Mode (follows system preference, defaults to dark) */
+  /* 墨靛基底：比冷炭灰更深更纯，带极轻蓝紫调，如无污染夜空，去灰而显深邃 */
+  --color-bg-base: #0e1018;
+  --color-bg-elevated: rgba(30, 30, 40, 0.85);
+  --color-glass-bg: rgba(255, 255, 255, 0.08);
+  --color-glass-bg-hover: rgba(255, 255, 255, 0.15);
+  --color-glass-border: rgba(255, 255, 255, 0.18);
+  --color-glass-border-hover: rgba(255, 255, 255, 0.5);
+  --color-glass-highlight: rgba(255, 255, 255, 0.15);
+  --color-text-primary: #ffffff;
+  --color-text-secondary: rgba(255, 255, 255, 0.7);
+  --color-text-muted: rgba(255, 255, 255, 0.5);
+  --color-accent: rgba(100, 180, 255, 0.7);
+  --color-danger: #ff7b7b;
+  --color-success: rgba(100, 255, 150, 0.3);
+  --color-error: rgba(255, 100, 100, 0.3);
+
+  /* Blob Colors - Dark：墨绿 / 黄铜 / 勃艮第，复古奢华的低饱和材质色——
+     经 blur + 半透明晕染后呈"有色彩倾向的暗影"，沉稳而有珠宝与旧金属质感，避免鲜艳 aurora 的廉价感 */
+  --blob-1: #2a745c;
+  --blob-2: #ad8440;
+  --blob-3: #74313d;
 }
 
-/* 定义浅色模式变量 */
-body.light-bg {
-    --text-primary: #333;
-    --text-secondary: #666;
-    --search-bg: rgba(255, 255, 255, 0.8);
-    --search-border: rgba(0, 0, 0, 0.1);
-    --search-placeholder: #aaa;
-    --search-text: #333;
-    --search-icon: #666;
-    --capsule-bg: rgba(255, 255, 255, 0.8);
-    --capsule-border: rgba(0, 0, 0, 0.1);
-    --capsule-divider: rgba(0, 0, 0, 0.1);
-    --capsule-hover: rgba(0, 0, 0, 0.1);
-    --text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    color: var(--text-primary);
+/* Light Mode Tokens - applied via body.light-bg, html.theme-light (anti-flash), or system preference */
+body.light-bg,
+html.theme-light body {
+  /* 明亮冷白基底：高明度、极轻蓝调，读作干净白而非灰，为清澈彩光提供通透画布 */
+  --color-bg-base: #f4f7fc;
+  --color-bg-elevated: rgba(245, 245, 247, 0.9);
+  --color-glass-bg: rgba(255, 255, 255, 0.75);
+  --color-glass-bg-hover: rgba(255, 255, 255, 0.9);
+  --color-glass-border: rgba(0, 0, 0, 0.1);
+  --color-glass-border-hover: rgba(0, 0, 0, 0.2);
+  --color-glass-highlight: rgba(255, 255, 255, 0.5);
+  --color-text-primary: #1a1a2e;
+  --color-text-secondary: rgba(0, 0, 0, 0.6);
+  --color-text-muted: rgba(0, 0, 0, 0.4);
+  --color-accent: rgba(0, 122, 255, 0.8);
+  --color-danger: #cc0000;
+  --color-success: rgba(0, 180, 80, 0.3);
+  --color-error: rgba(220, 50, 50, 0.3);
+
+  --shadow-glass: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-glass-hover: 0 6px 16px rgba(0, 0, 0, 0.09);
+  --shadow-float: 0 6px 16px rgba(0, 0, 0, 0.14);
+  --shadow-dialog: 0 10px 22px rgba(0, 0, 0, 0.11);
+  --shadow-toast: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-text: 0 1px 3px rgba(0, 0, 0, 0.3);
+
+  /* 液態玻璃令牌不在淺色模式覆蓋：玻璃組件全局統一為深色模式風格（見 :root），
+     僅文字與基礎背景隨模式適應，確保自動/亮色/深色三種模式下玻璃表現一致 */
+
+  /* Blob Colors - Light：柔和蓝粉紫，避免浅色下过艳 */
+  --blob-1: #7aa7ff;
+  --blob-2: #ff9ec4;
+  --blob-3: #b69bff;
 }
 
-/* 定义深色模式变量 */
-body {
-    margin: 0;
-    min-height: 100vh;
-    /* 使用深色背景避免白屏闪烁 */
-    background-color: #000000;
-    /* 只使用自定义背景图片，移除默认渐变 */
-    background-image: var(--bg-image);
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-attachment: fixed; /* 背景固定，不随滚动条移动 */
-    font-family: 'Segoe UI', sans-serif;
-    color: var(--text-primary);
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding-top: 10vh;
-    transition: background-image 0s ease; /* 移除背景图像的过渡效果以减少闪烁 */
-    width: 100vw;
-    height: 100vh;
+html.has-custom-bg body.light-bg {
+  --color-bg-elevated: rgba(245, 245, 247, 0.52);
+  --color-glass-bg: rgba(255, 255, 255, 0.1);
+  --color-glass-bg-hover: rgba(255, 255, 255, 0.16);
+  --color-glass-border: rgba(255, 255, 255, 0.34);
+  --color-glass-border-hover: rgba(255, 255, 255, 0.55);
 }
 
-/* 浏览器浅色模式下，默认使用深色文字 */
+html.has-custom-bg body {
+  --shadow-text: 0 1px 4px rgba(0, 0, 0, 0.36);
+  --shadow-text-light: 0 1px 3px rgba(255, 255, 255, 0.45);
+}
+
+/* System Light Mode - when no custom background and not explicitly set to dark */
 @media (prefers-color-scheme: light) {
-    body {
-        color: #333;
-        --text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    }
+  body:not(.light-bg):not(.dark-bg):not(.has-custom-bg) {
+    --color-bg-base: #f4f7fc;
+    --color-bg-elevated: rgba(245, 245, 247, 0.9);
+    --color-glass-bg: rgba(255, 255, 255, 0.75);
+    --color-glass-bg-hover: rgba(255, 255, 255, 0.9);
+    --color-glass-border: rgba(0, 0, 0, 0.1);
+    --color-glass-border-hover: rgba(0, 0, 0, 0.2);
+    --color-glass-highlight: rgba(255, 255, 255, 0.5);
+    --color-text-primary: #1a1a2e;
+    --color-text-secondary: rgba(0, 0, 0, 0.6);
+    --color-text-muted: rgba(0, 0, 0, 0.4);
+    --color-accent: rgba(0, 122, 255, 0.8);
+    --color-danger: #cc0000;
+    --color-success: rgba(0, 180, 80, 0.3);
+    --color-error: rgba(220, 50, 50, 0.3);
+
+    --shadow-glass: 0 4px 12px rgba(0, 0, 0, 0.06);
+    --shadow-glass-hover: 0 6px 16px rgba(0, 0, 0, 0.09);
+    --shadow-float: 0 6px 16px rgba(0, 0, 0, 0.14);
+    --shadow-dialog: 0 10px 22px rgba(0, 0, 0, 0.11);
+    --shadow-toast: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --shadow-text: 0 1px 3px rgba(0, 0, 0, 0.3);
+
+    /* 液態玻璃令牌不覆蓋：統一使用 :root 深色風格 */
+
+    /* Blob Colors - Light：柔和蓝粉紫，避免浅色下过艳 */
+    --blob-1: #7aa7ff;
+    --blob-2: #ff9ec4;
+    --blob-3: #b69bff;
+  }
 }
 
-/* 背景流动球体容器 */
-.blobs-container {
-    position: fixed;
-    top: 0; left: 0; width: 100vw; height: 100vh;
-    z-index: -1;
-    pointer-events: none;
-}
-
-/* 预加载背景容器 */
-#preload-bg {
-    /* 确保预加载背景始终在底层 */
-    z-index: -3;
-    /* 移除过渡效果 */
-    transition: opacity 0s ease;
-    /* 确保背景覆盖整个视口 */
-    width: 100vw;
-    height: 100vh;
-    position: fixed;
-    top: 0;
-    left: 0;
-}
-
-/* 当有自定义背景图时隐藏 blob 和默认背景 */
-.has-custom-bg .blobs-container {
-    display: none;
-}
-
-/* 深色模式适配：根据浏览器主题调整默认背景 */
+/* System Dark Mode - default fallback（与 :root 基底保持一致） */
 @media (prefers-color-scheme: dark) {
-    body {
-        background-color: #1a1a2e; /* 深色模式下的深色背景 */
-    }
-    
-    .blob-1 {
-        background: #4a00e0; /* 调整深色模式下的blob颜色 */
-    }
-    
-    .blob-2 {
-        background: #00c9ff; /* 调整深色模式下的blob颜色 */
-    }
-    
-    .blob-3 {
-        background: #ff4081; /* 调整深色模式下的blob颜色 */
-    }
+  body:not(.light-bg):not(.has-custom-bg) {
+    --color-bg-base: #0e1018;
+  }
 }
 
-@media (prefers-color-scheme: light) {
-    body {
-        background-color: #f0f4f8; /* 浅色模式下的浅色背景 */
-        color: #333; /* 浅色模式下的文本颜色 */
-        --text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); /* 浅色模式下的文本阴影 */
-    }
-    
-    .blob-1 {
-        background: #9c27b0; /* 调整浅色模式下的blob颜色 */
-    }
-    
-    .blob-2 {
-        background: #03a9f4; /* 调整浅色模式下的blob颜色 */
-    }
-    
-    .blob-3 {
-        background: #e91e63; /* 调整浅色模式下的blob颜色 */
-    }
-    
-    /* 浅色模式下的玻璃效果调整 */
-    .glass-element {
-        background: rgba(255, 255, 255, .8);
-        box-shadow: 0 0 0 1px rgba(0, 0, 0, .1), 0 16px 32px rgba(0, 0, 0, .08);
-    }
-    
-    .icon-hover:hover {
-        background: rgba(255, 255, 255, .9);
-        box-shadow: 0 15px 35px rgba(0,0,0,0.35);
-    }
-    
-    .shortcut-item::before {
-        background: rgba(255, 255, 255, .8);
-        box-shadow: 0 0 0 1px rgba(0, 0, 0, .1), 0 16px 32px rgba(0, 0, 0, .08);
-    }
-    
-    .shortcut-item:hover::before {
-        background: rgba(255, 255, 255, .9);
-        box-shadow: 0 15px 35px rgba(0,0,0,0.35);
-    }
-    
+/* ------------------------------------------
+   2. Base Styles
+   ------------------------------------------ */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--color-bg-base);
+  background-image: var(--bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-primary);
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 10vh;
+  width: 100vw;
+  overflow-y: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ------------------------------------------
+   3. Background System
+   ------------------------------------------ */
+
+/* 明度骨架层已清除：不再叠加任何改变背景亮度的遮罩，
+   保留空元素以维持 DOM 结构与 z-index 层叠顺序 */
+.bg-gradient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: none;
+}
+
+/* ------------------------------------------
+   4. Background Blob Animation（蓝/粉/紫三球碰撞）
+   ------------------------------------------ */
+.blobs-container {
+  position: fixed;
+  inset: 0;
+  /* 保持在内容层（.main-layout, z-index:1）之下，否则光球会盖在磁贴/图标上形成遮罩；
+     与 .bg-gradient 同为 0，靠 DOM 顺序叠在渐变之上 */
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.has-custom-bg .blobs-container {
+  display: none;
 }
 
 .blob {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(80px);
-    opacity: 0;
-    will-change: transform;
-    transition: opacity 0.6s ease;
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0;
+  will-change: transform;
+  transition: opacity 0.6s var(--ease-out-cubic, ease);
 }
+
 .blob.initialized {
-    opacity: 0.6;
+  opacity: 0.55;
 }
+
 .blob-3.initialized {
-    opacity: 0.4;
+  opacity: 0.42;
 }
-.blob-1 { top: 40%; left: 5%; width: 600px; height: 600px; background: #7f00ff; }
-.blob-2 { bottom: 10%; right: 5%; width: 500px; height: 500px; background: #00d2ff; }
-.blob-3 { top: 5%; left: 20%; width: 400px; height: 400px; background: #ff007f; }
 
-/* 通用液态玻璃类 */
+.blob-1 {
+  width: 520px;
+  height: 520px;
+  background: var(--blob-1);
+}
+
+.blob-2 {
+  width: 460px;
+  height: 460px;
+  background: var(--blob-2);
+}
+
+.blob-3 {
+  width: 420px;
+  height: 420px;
+  background: var(--blob-3);
+}
+
+/* Preload Background */
+#preload-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0;
+  transition: opacity var(--duration-normal) var(--ease-out-cubic);
+}
+
+/* ------------------------------------------
+   5. Glass Morphism Components
+   ------------------------------------------ */
+.glass-element,
+.glass-btn,
+.glass-dialog,
+.shortcut-item,
+.context-menu,
+.toast {
+  isolation: isolate;
+  overflow: hidden;
+}
+
 .glass-element {
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
-                box-shadow 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
-                background 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
-                border-color 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
-    position: relative;
-    outline: 0;
+  background: var(--liquid-fill);
+  border: 1px solid var(--liquid-stroke);
+  box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
+  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  backdrop-filter: var(--liquid-backdrop);
+  /* box-shadow 不参与过渡：其重绘在主线程执行，与合成器上的 transform 动画不同步，
+     导致取消悬浮时阴影“慢半拍”；悬浮阴影改由 .icon-hover::after 的 opacity 过渡实现 */
+  transition:
+    transform var(--duration-normal) var(--ease-out-cubic),
+    background var(--duration-normal) var(--ease-out-cubic),
+    border-color var(--duration-normal) var(--ease-out-cubic);
+  position: relative;
+  outline: 0;
 }
-/* 鼠标悬停时的通用微动效 */
+
+/* 玻璃質感完全由 backdrop-filter（blur + SVG 位移濾鏡）呈現。
+   不再使用 ::before 繪製背景模糊副本：該層會與 backdrop-filter 疊加形成雙重模糊，
+   且其 z-index 會覆蓋在文字之上導致字體被遮擋，亦使設置內按鈕殘留玻璃感，故移除。 */
+
+.glass-element:hover {
+  background: var(--liquid-fill-hover);
+  border-color: var(--liquid-stroke);
+}
+
+.icon-hover {
+  cursor: pointer;
+  /* 确保 ::after 阴影层相对自身定位（部分 .icon-hover 元素无 position 声明） */
+  position: relative;
+  /* 常驻独立合成层：防止取消悬浮后 transform 归零时合成层被降级（de-promote），
+     避免 backdrop-filter（SVG 位移滤镜）重光栅化瞬间在元素外侧闪现一帧边框 */
+  will-change: transform;
+}
+
+/* 悬浮阴影层：预渲染在伪元素上，仅过渡 opacity（纯合成器属性），与 transform 同线程执行。
+   淡出用极短时长 + ease-in：取消悬浮时元素归位快（ease-out 起步陡），
+   阴影必须以更快的速度消失，否则半透明尾巴会以“黑框”形式残留片刻 */
+.icon-hover::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: var(--shadow-float);
+  opacity: 0;
+  /* 淡出（取消悬浮）：0.1s 内干净消失，不留黑框 */
+  transition: opacity 0.1s var(--ease-in-cubic);
+  pointer-events: none;
+  z-index: -1;
+}
+
 .icon-hover:hover {
-    transform: translateY(-2px);
-    background: var(--capsule-hover);
-    box-shadow: 0 15px 35px rgba(0,0,0,0.35);
+  transform: translateY(-2px);
 }
 
+.icon-hover:hover::after {
+  opacity: 1;
+  /* 淡入（悬浮）：平滑浮现 */
+  transition: opacity var(--duration-normal) var(--ease-out-cubic);
+}
 
+button:focus-visible,
+input:focus-visible,
+.shortcut-item:focus-visible,
+.menu-item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
 
-/* 布局容器 */
+/* ------------------------------------------
+   6. Layout
+   ------------------------------------------ */
 .main-layout {
-    width: 100%; max-width: 1200px;
-    display: flex; flex-direction: column; align-items: center;
-    gap: 45px; padding: 20px;
-    transform: scale(var(--scale));
-    transform-origin: center top;
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-10);
+  padding: var(--space-5);
+  position: relative;
+  /* 显式提升到背景层（bg-gradient / blobs-container, z-index:0）之上，
+     避免内容被默认背景的碰撞光球遮挡 */
+  z-index: 1;
+  padding-bottom: var(--space-16);
 }
 
+/* ------------------------------------------
+   7. Search Component
+   ------------------------------------------ */
 .search-wrapper {
-    width: 100%; 
-    max-width: 580px;
-    position: relative;
+  width: 100%;
+  max-width: var(--search-width);
+  position: relative;
 }
 
 .search-capsule {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    height: 52px;
-    border-radius: 26px;
-    padding: 0 4px;
-    box-sizing: border-box;
-    transition: transform 0.3s ease,
-                box-shadow 0.3s ease,
-                background 0.3s ease,
-                border-color 0.3s ease;
-}
-
-.search-capsule:hover {
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .3), 0 16px 32px rgba(0, 0, 0, .12);
-    background: var(--capsule-hover);
-}
-
-
-
-/* 搜索引擎选择器 */
-
-/* 引擎选择器样式已由颜色类控制 */
-
-.engine-label {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--search-text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 80px;
-    display: block;
-}
-
-/* 分隔线样式独立，不再依赖light-bg */
-.divider {
-    width: 1px; 
-    height: 24px; 
-    background: var(--capsule-divider); 
-    margin: 0 6px;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 52px;
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-1);
+  gap: var(--space-1);
 }
 
 .search-capsule input {
-    flex: 1 1 auto;
-    background: transparent;
-    border: none;
-    color: var(--search-text);
-    font-size: 17px;
-    outline: none;
-    padding: 0 10px;
-    min-width: 150px;
-    width: 100%;
+  flex: 1 1 auto;
+  background: transparent;
+  border: none;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-md);
+  outline: none;
+  padding: 0 var(--space-3);
+  min-width: 150px;
+  width: 100%;
 }
 
-/* 搜索框文字颜色设置 */
+.search-capsule input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.search-capsule button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  border-radius: 50%;
+  color: var(--color-text-primary);
+  transition: background var(--duration-fast) var(--ease-out-cubic);
+}
+
+.search-capsule button:hover {
+  background: var(--liquid-fill-hover);
+}
+
+/* Text Color Utilities */
 .text-color-dark #search-input,
 .text-color-dark .engine-label {
-    color: #333 !important;
+  color: #333 !important;
 }
 
 .text-color-light #search-input,
 .text-color-light .engine-label {
-    color: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+  color: white !important;
+  text-shadow: var(--shadow-text);
 }
 
-.search-capsule input::placeholder {
-    color: var(--search-placeholder);
-}
-
-.search-capsule button {
-    background: transparent; 
-    border: none; 
-    cursor: pointer; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    padding: 10px; 
-    border-radius: 50%; 
-    color: var(--search-icon);
-}
-
-/* 搜索框图标颜色设置 */
 .icon-color-dark .search-icon,
 .icon-color-dark svg {
-    color: #333 !important;
-    stroke: #333 !important;
+  color: #333 !important;
+  stroke: #333 !important;
 }
 
 .icon-color-light .search-icon,
 .icon-color-light svg {
-    color: white !important;
-    stroke: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
-    filter: drop-shadow(var(--text-shadow)); /* 使用统一的阴影变量 */
+  color: white !important;
+  stroke: white !important;
+  filter: drop-shadow(var(--shadow-text));
 }
 
-/* 为设置按钮的SVG图标取消阴影效果 */
 .settings-btn.icon-color-light svg {
-    text-shadow: none !important;
-    filter: none !important;
+  filter: none !important;
 }
 
-
-
-/* 2. 快捷方式网格 */
+/* ------------------------------------------
+   8. Shortcuts Grid
+   ------------------------------------------ */
 .grid-container {
-    display: grid;
-    grid-template-columns: repeat(var(--col-count), 1fr);
-    gap: 25px;
-    width: fit-content;
-    padding: 10px;
-}
-.shortcut-item {
-    width: var(--item-size);
-    height: var(--item-size);
-    border-radius: 24px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    text-decoration: none;
-    overflow: hidden;
-    position: relative;
-    z-index: 1;
-    background: transparent;
-    border: none;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-    box-shadow: none;
-    transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+  display: grid;
+  grid-template-columns: repeat(var(--active-col-count), var(--item-size));
+  gap: var(--space-5);
+  width: min-content;
+  max-width: calc(100vw - var(--space-8));
+  padding: var(--space-3);
+  justify-content: center;
 }
 
-.shortcut-item::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: -1;
-    border-radius: inherit;
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    transform: translateZ(0);
-    will-change: transform;
-    transition: background 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
-                border-color 0.25s cubic-bezier(0.25, 0.8, 0.25, 1),
-                box-shadow 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+.shortcut-item {
+  width: var(--item-size);
+  height: var(--item-size);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  text-decoration: none;
+  position: relative;
+  background: var(--liquid-fill);
+  border: 1px solid var(--liquid-stroke);
+  box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
+  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  backdrop-filter: var(--liquid-backdrop);
+  /* box-shadow 不参与过渡（同 .glass-element）：悬浮阴影由 ::after 的 opacity 接管 */
+  transition:
+    transform var(--duration-normal) var(--ease-out-cubic),
+    background var(--duration-normal) var(--ease-out-cubic),
+    border-color var(--duration-normal) var(--ease-out-cubic);
+  /* 保持独立合成层，避免悬浮结束时位移回到原位出现跳变 */
+  will-change: transform;
+  /* 覆盖共享玻璃规则的 overflow:hidden——该属性在合成器中产生独立裁剪层，
+     当右键菜单等外部元素触发页面重合成时，裁剪层与 backdrop-filter（SVG 位移滤镜）
+     的光栅化输出可能错位，在最右列图标右缘泄漏出纵向亮条（"分层"）。
+     移除后由 border-radius 在现代 Chromium 中原生裁剪 backdrop-filter 圆角，
+     同时保留 box-shadow 外阴影不被裁剪（clip-path 会连阴影一起裁掉） */
+  overflow: visible;
 }
 
 .shortcut-item:hover {
-    transform: translateY(-8px) scale(1.03);
-    z-index: 10;
+  z-index: 10;
+  transform: translateY(-2px);
+  background: var(--liquid-fill-hover);
+  border-color: var(--liquid-stroke);
 }
-
-.shortcut-item:hover::before {
-    background: var(--capsule-hover);
-    border-color: rgba(255,255,255,0.5);
-    box-shadow: 0 15px 35px rgba(0,0,0,0.35);
-}
-
 
 .shortcut-item img {
-    width: 42%; 
-    height: 42%; 
-    margin-bottom: 12px; 
-    filter: drop-shadow(0 4px 4px rgba(0,0,0,0.2)); 
-    transition: 0.3s; 
-    pointer-events: none;
-    /* 添加以下属性以支持非正方形图标保持原有比例 */
-    object-fit: contain;
-    object-position: center;
+  width: 42%;
+  height: 42%;
+  margin-bottom: var(--space-3);
+  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, 0.2));
+  transition: transform var(--duration-normal) var(--ease-out-cubic);
+  pointer-events: none;
+  object-fit: contain;
+  object-position: center;
 }
 
-.shortcut-item:hover img { 
-    transform: scale(1.12); 
-    /* 确保悬停时也保持正确的比例 */
-    object-fit: contain;
+.shortcut-item:hover img {
+  transform: scale(1.08);
 }
 
 .shortcut-item span {
-    font-size: 13px;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 90%;
-    pointer-events: none;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90%;
+  pointer-events: none;
 }
 
-/* 快捷方式文字颜色设置 */
 .shortcut-color-dark .shortcut-item span {
-    color: #333 !important;
+  color: #333 !important;
 }
 
 .shortcut-color-light .shortcut-item span {
-    color: white !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+  color: white !important;
+  text-shadow: var(--shadow-text);
 }
 
-.shortcut-item.dragging { opacity: 0.3; transform: scale(0.95); }
-.shortcut-item.dragging::before { border: 2px dashed rgba(255,255,255,0.4); }
+.shortcut-item.dragging {
+  opacity: 0.3;
+  transform: scale(0.95);
+  outline: 2px dashed var(--liquid-highlight);
+  outline-offset: 4px;
+}
 
-/* 添加按钮 (修复居中，改为SVG) */
+.shortcut-item.drag-over::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  z-index: 2;
+  border: 2px solid var(--color-accent);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* Favicon Fallback */
+.favicon-fallback {
+  width: 42%;
+  height: 42%;
+  margin-bottom: var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  pointer-events: none;
+  text-shadow: var(--shadow-text);
+}
+
+.shortcut-color-dark .favicon-fallback {
+  color: #333 !important;
+}
+
+.shortcut-color-light .favicon-fallback {
+  color: white !important;
+}
+
+/* Add Button */
 .add-btn {
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    margin-bottom: 50px;
-    color: var(--text-primary);
-    padding: 0;
-    transition: transform 0.3s ease,
-                box-shadow 0.3s ease,
-                background 0.3s ease,
-                border-color 0.3s ease;
-    text-shadow: var(--text-shadow);
-    filter: drop-shadow(var(--text-shadow));
-    z-index: 1;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-bottom: var(--space-12);
+  color: var(--color-text-primary);
+  padding: 0;
+  text-shadow: var(--shadow-text);
+  filter: drop-shadow(var(--shadow-text));
+  z-index: 1;
 }
 
-/* 添加按钮悬停效果 */
-.add-btn:hover {
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .3), 0 16px 32px rgba(0, 0, 0, .12);
-    background: var(--capsule-hover);
-    transform: translateY(-2px);
-}
-
-
-
-/* 设置按钮 */
+/* ------------------------------------------
+   9. Settings Button
+   ------------------------------------------ */
 .settings-btn {
-    position: fixed;
-    top: 25px;
-    right: 25px;
-    width: 44px;
-    height: 44px;
-    border-radius: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    z-index: 100;
-    color: var(--text-primary);
-    transition: transform 0.3s ease,
-                box-shadow 0.3s ease,
-                background 0.3s ease,
-                border-color 0.3s ease;
+  position: fixed;
+  top: var(--space-5);
+  right: var(--space-5);
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 100;
+  color: var(--color-text-primary);
 }
 
-/* 设置按钮悬停效果 */
-.settings-btn:hover {
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .3), 0 16px 32px rgba(0, 0, 0, .12);
-    background: var(--capsule-hover);
-    transform: translateY(-2px);
-}
-
-
-
-/* 弹窗和通用玻璃输入/按钮组件 */
+/* ------------------------------------------
+   10. Dialog Components
+   ------------------------------------------ */
 .glass-dialog {
-    background: rgba(30, 30, 40, 0.85);
-    border: 1px solid transparent;
-    border-radius: 24px;
-    color: #fff;
-    padding: 32px;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    min-width: 340px;
-    position: relative;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    outline: 0;
+  background: var(--liquid-fill-strong);
+  border: 1px solid var(--liquid-stroke);
+  border-radius: var(--radius-2xl);
+  color: var(--color-text-primary);
+  padding: var(--space-8);
+  box-shadow: 0 22px 58px rgba(0, 0, 0, 0.14), var(--liquid-inner-shadow);
+  min-width: 340px;
+  position: relative;
+  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  backdrop-filter: var(--liquid-backdrop);
+  outline: 0;
+  overflow: hidden;
 }
 
-.glass-dialog::backdrop { 
-    background: rgba(0,0,0,0.5); 
-    backdrop-filter: blur(4px); 
+.glass-dialog::backdrop {
+  background: rgba(20, 26, 36, 0.22);
+  backdrop-filter: blur(var(--blur-md));
 }
 
-.dialog-title { 
-    margin: 0 0 20px 0;
-    font-weight: 400;
-    font-size: 1.4em; 
-    color: inherit;
-    text-align: center;
-    padding: 12px 20px;
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid transparent;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    position: relative;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    outline: 0;
-    width: 100%;
-    box-sizing: border-box;
-    grid-column: 1 / -1;
+.dialog-title {
+  margin: 0 0 var(--space-6) 0;
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-xl);
+  color: var(--color-text-primary);
+  text-align: center;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--liquid-fill);
+  border: 1px solid var(--liquid-stroke);
+  box-shadow: var(--liquid-inner-shadow);
+  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  backdrop-filter: var(--liquid-backdrop);
+  width: 100%;
+  box-sizing: border-box;
+  grid-column: 1 / -1;
 }
 
+/* Light mode dialog adjustments */
 .glass-dialog.light-bg {
-    background: rgba(245, 245, 247, 0.9);
-    color: #333;
-    border: 1px solid rgba(0,0,0,0.15);
-    border-top-color: rgba(0,0,0,0.3);
+  background: var(--liquid-fill-strong);
+  color: var(--color-text-primary);
+  border-color: var(--liquid-stroke);
 }
 
 .glass-dialog.light-bg .dialog-title {
-    background: rgba(255, 255, 255, 0.3);
-    color: #333;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  background: var(--liquid-fill);
+  color: var(--color-text-primary);
+  border-color: var(--liquid-stroke);
+  box-shadow: var(--liquid-inner-shadow);
 }
 
 .glass-dialog.dark-mode,
 .glass-dialog.dark-mode .glass-input {
-    background: rgba(30, 30, 40, 0.9);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.15);
-    border-top-color: rgba(255,255,255,0.3);
+  background: var(--liquid-fill-strong);
+  color: #fff;
+  border-color: transparent;
 }
 
 .glass-dialog.dark-mode .dialog-title {
-    background: rgba(255, 255, 255, 0.08);
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  background: var(--liquid-fill);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* Form Inputs */
+/* 仅保留下边距：避免首个字段与标题的下边距叠加产生过大间距，保证字段间距统一 */
+.form-group {
+  margin: 0 0 var(--space-4) 0;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
 }
 
 .glass-input {
-    display: block;
-    width: 100%;
-    margin: 15px 0;
-    padding: 12px 16px;
-    background: rgba(255,255,255,0.1);
-    border: 1px solid transparent;
-    color: #fff;
-    border-radius: 12px;
-    box-sizing: border-box;
-    font-size: 15px;
-    outline: none;
-    transition: 0.2s;
-    position: relative;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    outline: 0;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--liquid-fill);
+  border: 1px solid var(--liquid-stroke);
+  color: var(--color-text-primary);
+  border-radius: var(--radius-md);
+  box-sizing: border-box;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  outline: none;
+  transition:
+    border-color var(--duration-fast) var(--ease-out-cubic),
+    background var(--duration-fast) var(--ease-out-cubic);
+  box-shadow: var(--liquid-inner-shadow);
+  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  backdrop-filter: var(--liquid-backdrop);
+}
+
+.glass-input:focus {
+  border-color: var(--color-accent);
+  background: var(--liquid-fill-hover);
 }
 
 .glass-dialog.light-bg .glass-input {
-    background: rgba(255,255,255,0.8);
-    border: 1px solid transparent;
-    color: #333;
-    position: relative;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    outline: 0;
-}
-
-.glass-dialog.dark-mode .glass-input {
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.2);
-    color: #fff;
-}
-
-/* 图标按钮容器样式 */
-.icon-button-container {
-    display: flex;
-    gap: 10px;
-    margin: 15px 0;
-}
-
-.icon-button-container .glass-btn {
-    flex: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 10px 12px;
-    min-height: 44px;
-}
-
-.glass-input:focus { 
-    border-color: rgba(100,180,255,0.7);
-    background: rgba(255,255,255,0.15); 
+  background: var(--liquid-fill);
+  color: var(--color-text-primary);
 }
 
 .glass-dialog.light-bg .glass-input:focus {
-    border-color: rgba(0,122,255,0.8);
-    background: rgba(255,255,255,0.95);
+  border-color: var(--color-accent);
+  background: var(--liquid-fill-hover);
 }
 
-.glass-dialog.dark-mode .glass-input:focus {
-    border-color: rgba(100,180,255,0.7);
-    background: rgba(255,255,255,0.15);
+/* 图标 URL 设置项：左侧大预览 + 右侧（URL 输入 + 悬浮垃圾桶清除 / 操作按钮） */
+.icon-editor {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-4);
+  align-items: stretch;
 }
 
-/* 自定义滑块样式 - 玻璃效果 */
-input[type="range"] {
-    width: 100%;
-    margin: 10px 0 20px 0;
-    cursor: pointer;
-    -webkit-appearance: none;
-    appearance: none;
-    height: 6px;
-    border-radius: 3px;
-    background: rgba(255,255,255,0.1);
-    outline: none;
+/* 图标预览：固定尺寸，配合 img 的 object-fit: contain 使任意大小的图标都被约束在框内，
+   不会因图标过大/过小撑破或影响布局 */
+.icon-preview {
+  width: 96px;
+  height: 96px;
+  align-self: center;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--liquid-stroke);
+  background: var(--liquid-fill);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  transition:
+    border-color var(--duration-fast) var(--ease-out-cubic),
+    background var(--duration-fast) var(--ease-out-cubic),
+    color var(--duration-fast) var(--ease-out-cubic);
 }
 
-.glass-dialog.light-bg input[type="range"] {
-    background: rgba(0,0,0,0.1);
+.icon-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: none;
+  padding: 14px;
+  box-sizing: border-box;
 }
 
-input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: #ffffff;
-    cursor: pointer;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+.icon-preview .icon-placeholder {
+  display: block;
+  opacity: 0.5;
 }
 
-.glass-dialog.light-bg input[type="range"]::-webkit-slider-thumb {
-    background: #333333;
+.icon-preview.has-icon img {
+  display: block;
 }
 
-input[type="range"]::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: #ffffff;
-    cursor: pointer;
-    border: none;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+.icon-preview.has-icon .icon-placeholder {
+  display: none;
 }
 
-.glass-dialog.light-bg input[type="range"]::-moz-range-thumb {
-    background: #333333;
+.icon-editor-controls {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
-/* 统一的玻璃风格按钮 */
+.icon-url-input-wrap {
+  position: relative;
+}
+
+/* 垃圾桶隐藏时输入框全宽显示文本；仅在悬浮/聚焦（垃圾桶出现的相同时机）预留其空间，
+   padding-right 过渡与垃圾桶淡入同步，条件与下方垃圾桶显示规则一一对应 */
+.icon-url-input-wrap .icon-url-input {
+  transition:
+    border-color var(--duration-fast) var(--ease-out-cubic),
+    background var(--duration-fast) var(--ease-out-cubic),
+    box-shadow var(--duration-fast) var(--ease-out-cubic),
+    padding-right var(--duration-fast) var(--ease-out-cubic);
+}
+
+.icon-url-input-wrap:hover .icon-url-input,
+.icon-url-input:focus,
+.icon-url-input-wrap:has(.icon-url-clear:focus-visible) .icon-url-input {
+  padding-right: 46px;
+}
+
+/* 垃圾桶清除按钮：默认隐藏，悬浮输入区或输入框聚焦时淡入 */
+.icon-url-clear {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  /* 隐藏时不拦截点击，避免不可见的按钮抢占输入框右侧的点击/光标定位 */
+  pointer-events: none;
+  outline: none;
+  transition:
+    opacity var(--duration-fast) var(--ease-out-cubic),
+    background var(--duration-fast) var(--ease-out-cubic),
+    color var(--duration-fast) var(--ease-out-cubic);
+}
+
+.icon-url-input-wrap:hover .icon-url-clear,
+.icon-url-input:focus ~ .icon-url-clear,
+.icon-url-clear:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.icon-url-clear:hover {
+  background: rgba(255, 92, 92, 0.14);
+  color: #ff8080;
+}
+
+.icon-editor-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+/* 让"重新获取图标"与"上传图标"两个按钮平分并占满整行 */
+.icon-editor-actions > .glass-btn {
+  flex: 1;
+  justify-content: center;
+}
+
+.glass-btn.compact {
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-size-sm);
+}
+
+/* 窄屏下图标编辑区改为上下堆叠：预览保持固定尺寸并靠左 */
+@media (max-width: 430px) {
+  .icon-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .icon-preview {
+    align-self: start;
+    justify-self: start;
+    width: 88px;
+    height: 88px;
+  }
+}
+
+/* Glass Buttons */
 .glass-btn {
-    padding: 10px 20px; 
-    border-radius: 12px; 
-    border: 1px solid transparent;
-    background: rgba(255,255,255,0.05); 
-    color: white; 
-    cursor: pointer;
-    font-size: 14px; 
-    font-weight: 600; 
-    transition: 0.2s;
-    display: inline-flex; 
-    align-items: center; 
-    justify-content: center; 
-    gap: 8px;
-    position: relative;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    outline: 0;
-    min-height: 44px;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--liquid-stroke);
+  background: var(--liquid-fill);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  transition: all var(--duration-fast) var(--ease-out-cubic);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  position: relative;
+  box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
+  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  backdrop-filter: var(--liquid-backdrop);
+  outline: 0;
+  min-height: 44px;
 }
 
-.glass-btn:hover { 
-    background: rgba(255,255,255,0.15); 
-    border-color: rgba(255,255,255,0.3); 
+.glass-btn:hover {
+  background: var(--liquid-fill);
+  border-color: var(--liquid-stroke);
 }
 
-.glass-btn.primary { 
-    background: rgba(255,255,255,0.15); 
-    border-color: rgba(255,255,255,0.25); 
+.glass-btn.primary {
+  background: var(--liquid-fill-hover);
+  border-color: transparent;
 }
 
-.glass-btn.primary:hover { 
-    background: rgba(255,255,255,0.25); 
+.glass-btn.primary:hover {
+  background: var(--liquid-fill);
 }
 
-.glass-btn.danger { 
-    color: #ff7b7b; 
+.glass-btn.danger {
+  color: var(--color-danger);
 }
 
-.glass-btn.full-width { 
-    width: 100%; 
+.glass-btn.full-width {
+  width: 100%;
 }
 
 .glass-dialog.light-bg .glass-btn {
-    color: #333;
-    border: 1px solid rgba(0,0,0,0.1);
-    background: rgba(255,255,255,0.5);
+  color: var(--color-text-primary);
+  border-color: var(--liquid-stroke);
+  background: var(--liquid-fill);
 }
 
 .glass-dialog.light-bg .glass-btn:hover {
-    background: rgba(0,0,0,0.1);
-    border-color: rgba(0,0,0,0.2);
+  background: var(--liquid-fill);
+  border-color: var(--liquid-stroke);
 }
 
 .glass-dialog.light-bg .glass-btn.primary {
-    background: rgba(0,0,0,0.2);
-    border-color: rgba(0,0,0,0.2);
-    color: #333;
-    font-weight: 600;
+  background: var(--liquid-fill-hover);
+  color: var(--color-text-primary);
 }
 
 .glass-dialog.light-bg .glass-btn.primary:hover {
-    background: rgba(0,0,0,0.3);
-    border-color: rgba(0,0,0,0.3);
+  background: var(--liquid-fill);
 }
 
 .glass-dialog.light-bg .glass-btn.danger {
-    color: #cc0000;
+  color: var(--color-danger);
 }
 
- 
- 
+/* Dialog Actions */
+.dialog-actions {
+  grid-column: 1 / -1;
+  margin-top: var(--space-4);
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+}
 
+/* ------------------------------------------
+   11. Settings Modal
+   ------------------------------------------ */
 .settings-modal {
   width: 500px;
   max-width: 90vw;
   max-height: 90vh;
   overflow-y: auto;
-  padding: 20px;
-  position: relative;
+  overflow-x: hidden;
+  padding: var(--space-6);
 }
 
 .settings-modal::backdrop {
-  background: rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(4px);
+  background: rgba(20, 26, 36, 0.18);
+  backdrop-filter: blur(var(--blur-md));
 }
 
-.settings-modal .settings-content {
+/* ------------------------------------------
+   纯色 · 简约现代风格弹窗（不使用液态玻璃）
+   #settings-dialog 与 #edit-dialog 共享同一套纯色样式
+   ------------------------------------------ */
+#settings-dialog,
+#edit-dialog {
+  background: #1d1d24;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  color: #ececf1;
+}
+
+/* 编辑快捷方式对话框：更宽的布局 */
+#edit-dialog {
+  width: 480px;
+  max-width: calc(100vw - 48px);
+}
+
+#settings-dialog .dialog-title,
+#edit-dialog .dialog-title {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  text-align: left;
+  padding: 0 0 var(--space-4) 0;
+  margin: 0 0 var(--space-5) 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: #ececf1;
+}
+
+/* 扁平按钮（共享） */
+#settings-dialog .glass-btn,
+#edit-dialog .glass-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  color: #ececf1;
+  border-radius: var(--radius-md);
+}
+
+#settings-dialog .glass-btn:hover,
+#edit-dialog .glass-btn:hover {
+  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: none;
+  transform: none;
+}
+
+#settings-dialog .glass-btn.primary,
+#edit-dialog .glass-btn.primary {
+  background: #4a8cff;
+  border-color: #4a8cff;
+  color: #fff;
+}
+
+#settings-dialog .glass-btn.primary:hover,
+#edit-dialog .glass-btn.primary:hover {
+  background: #3b7df2;
+  border-color: #3b7df2;
+}
+
+#settings-dialog .glass-btn.danger,
+#edit-dialog .glass-btn.danger {
+  background: rgba(255, 92, 92, 0.12);
+  border-color: rgba(255, 92, 92, 0.25);
+  color: #ff7a7a;
+}
+
+#settings-dialog .glass-btn.danger:hover,
+#edit-dialog .glass-btn.danger:hover {
+  background: rgba(255, 92, 92, 0.2);
+}
+
+/* 表单输入框（共享） */
+#settings-dialog .glass-input,
+#edit-dialog .glass-input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  color: #ececf1;
+}
+
+#settings-dialog .glass-input:focus,
+#edit-dialog .glass-input:focus {
+  border-color: #4a8cff;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* 表单标签（共享） */
+#settings-dialog .form-label,
+#edit-dialog .form-label {
+  color: rgba(236, 236, 241, 0.65);
+}
+
+/* 图标预览区（编辑弹窗） */
+#edit-dialog .icon-preview {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(236, 236, 241, 0.45);
+}
+
+#edit-dialog .icon-preview.has-icon {
+  border-color: rgba(74, 140, 255, 0.45);
+  background: rgba(74, 140, 255, 0.08);
+}
+
+#edit-dialog .icon-url-clear {
+  color: rgba(236, 236, 241, 0.55);
+}
+
+/* 分段式标签页（设置专属） */
+#settings-dialog .settings-tabs {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+#settings-dialog .settings-tab {
+  color: rgba(236, 236, 241, 0.55);
+  transition: color var(--duration-fast) var(--ease-out-cubic),
+    background var(--duration-fast) var(--ease-out-cubic);
+}
+
+#settings-dialog .settings-tab:hover {
+  color: rgba(236, 236, 241, 0.85);
+}
+
+#settings-dialog .settings-tab.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  box-shadow: none;
+}
+
+#settings-dialog .color-mode-buttons .glass-btn.active {
+  background: rgba(74, 140, 255, 0.18);
+  border-color: rgba(74, 140, 255, 0.55);
+  color: #8db6ff;
+}
+
+/* 滑块（设置专属） */
+#settings-dialog input[type="range"] {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+#settings-dialog input[type="range"]::-webkit-slider-thumb {
+  background: #4a8cff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* 文本层级（设置专属） */
+#settings-dialog .settings-section h4 {
+  color: rgba(236, 236, 241, 0.45);
+  opacity: 1;
+}
+
+#settings-dialog .setting-name {
+  color: rgba(236, 236, 241, 0.75);
+  opacity: 1;
+}
+
+#settings-dialog .setting-value {
+  color: #fff;
+}
+
+/* 纯色弹窗 · 浅色模式（共享） */
+#settings-dialog.light-bg,
+#edit-dialog.light-bg {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.22);
+  color: #1a1a2e;
+}
+
+#settings-dialog.light-bg .dialog-title,
+#edit-dialog.light-bg .dialog-title {
+  color: #1a1a2e;
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+#settings-dialog.light-bg .glass-btn,
+#edit-dialog.light-bg .glass-btn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #1a1a2e;
+}
+
+#settings-dialog.light-bg .glass-btn:hover,
+#edit-dialog.light-bg .glass-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.16);
+}
+
+#settings-dialog.light-bg .glass-btn.primary,
+#edit-dialog.light-bg .glass-btn.primary {
+  background: #2f6fe4;
+  border-color: #2f6fe4;
+  color: #fff;
+}
+
+#settings-dialog.light-bg .glass-btn.primary:hover,
+#edit-dialog.light-bg .glass-btn.primary:hover {
+  background: #2560d0;
+  border-color: #2560d0;
+}
+
+#settings-dialog.light-bg .glass-btn.danger,
+#edit-dialog.light-bg .glass-btn.danger {
+  background: rgba(220, 50, 50, 0.08);
+  border-color: rgba(220, 50, 50, 0.2);
+  color: #d64545;
+}
+
+#settings-dialog.light-bg .glass-input,
+#edit-dialog.light-bg .glass-input {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #1a1a2e;
+}
+
+#settings-dialog.light-bg .glass-input:focus,
+#edit-dialog.light-bg .glass-input:focus {
+  border-color: #2f6fe4;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+#settings-dialog.light-bg .form-label,
+#edit-dialog.light-bg .form-label {
+  color: rgba(26, 26, 46, 0.65);
+}
+
+#edit-dialog.light-bg .icon-preview {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: rgba(26, 26, 46, 0.45);
+}
+
+#edit-dialog.light-bg .icon-preview.has-icon {
+  border-color: rgba(47, 111, 228, 0.45);
+  background: rgba(47, 111, 228, 0.06);
+}
+
+#edit-dialog.light-bg .icon-url-clear {
+  color: rgba(26, 26, 46, 0.55);
+}
+
+/* 纯色弹窗 · 浅色模式（设置专属） */
+#settings-dialog.light-bg .settings-tabs {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+#settings-dialog.light-bg .settings-tab {
+  color: rgba(26, 26, 46, 0.55);
+}
+
+#settings-dialog.light-bg .settings-tab:hover {
+  color: rgba(26, 26, 46, 0.8);
+}
+
+#settings-dialog.light-bg .settings-tab.active {
+  background: #fff;
+  color: #1a1a2e;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+#settings-dialog.light-bg .color-mode-buttons .glass-btn.active {
+  background: rgba(47, 111, 228, 0.12);
+  border-color: rgba(47, 111, 228, 0.5);
+  color: #2f6fe4;
+}
+
+#settings-dialog.light-bg input[type="range"] {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+#settings-dialog.light-bg input[type="range"]::-webkit-slider-thumb {
+  background: #2f6fe4;
+}
+
+#settings-dialog.light-bg .settings-section h4 {
+  color: rgba(26, 26, 46, 0.45);
+}
+
+#settings-dialog.light-bg .setting-name {
+  color: rgba(26, 26, 46, 0.7);
+}
+
+#settings-dialog.light-bg .setting-value {
+  color: #1a1a2e;
+}
+
+/* 浅色模式滚动条 */
+#settings-dialog.light-bg::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+#settings-dialog.light-bg::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+#settings-dialog.light-bg::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* 背景设置 · 浅色模式：液态玻璃令牌（透明描边 + 白色填充）在浅色弹窗上不可见，
+   统一覆盖为与布局标签页一致的浅色语言（深色描边 + 白色高亮 + 蓝色强调） */
+#settings-dialog.light-bg .bg-mode-segmented .seg-btn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: rgba(26, 26, 46, 0.55);
+  box-shadow: none;
+}
+
+#settings-dialog.light-bg .bg-mode-segmented .seg-btn:hover {
+  color: rgba(26, 26, 46, 0.8);
+  border-color: rgba(0, 0, 0, 0.16);
+}
+
+#settings-dialog.light-bg .bg-mode-segmented .seg-btn.active {
+  background: #fff;
+  border-color: rgba(47, 111, 228, 0.5);
+  color: #2f6fe4;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+#settings-dialog.light-bg .bg-quality-segmented {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+#settings-dialog.light-bg .bg-quality-segmented .seg-btn {
+  color: rgba(26, 26, 46, 0.55);
+}
+
+#settings-dialog.light-bg .bg-quality-segmented .seg-btn:hover {
+  color: rgba(26, 26, 46, 0.8);
+}
+
+#settings-dialog.light-bg .bg-quality-segmented .seg-btn.active {
+  background: #fff;
+  color: #1a1a2e;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+#settings-dialog.light-bg .bg-subpanel {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+#settings-dialog.light-bg .bg-subpanel-label {
+  color: rgba(26, 26, 46, 0.7);
+}
+
+#settings-dialog.light-bg .wall-preview {
+  background-color: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+#settings-dialog.light-bg .wall-preview-empty {
+  color: rgba(26, 26, 46, 0.4);
+}
+
+#settings-dialog.light-bg .wall-refresh {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #1a1a2e;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+#settings-dialog.light-bg .wall-refresh:hover {
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+#settings-dialog.light-bg .glass-select {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #1a1a2e;
+}
+
+#settings-dialog.light-bg .glass-select:hover,
+#settings-dialog.light-bg .glass-select:focus-visible {
+  border-color: rgba(47, 111, 228, 0.5);
+}
+
+#settings-dialog.light-bg .glass-select option {
+  background: #ffffff;
+  color: #1a1a2e;
+}
+
+.settings-content {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 20px;
+  gap: var(--space-5);
+}
+
+.settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  background: var(--liquid-fill);
+  border: 1px solid var(--liquid-stroke);
+}
+
+.settings-tab {
+  min-height: 38px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.settings-tab.active {
+  background: var(--liquid-fill-hover);
+  color: var(--color-text-primary);
+  box-shadow: var(--liquid-inner-shadow);
+}
+
+.settings-panel[hidden] {
+  display: none;
 }
 
 .settings-modal::-webkit-scrollbar {
-    width: 8px;
+  width: var(--space-2);
 }
 
 .settings-modal::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
 }
 
 .settings-modal::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 4px;
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: var(--radius-sm);
 }
 
 .settings-modal::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.3);
+  background: var(--color-text-muted);
 }
 
-.settings-section h4 { 
-    margin: 0 0 15px 0; 
-    opacity: 0.7; 
-    font-weight: normal; 
-    font-size: 0.9em; 
-    text-transform: uppercase; 
-    letter-spacing: 1px; 
+.settings-section h4 {
+  margin: 0 0 var(--space-4) 0;
+  opacity: 0.7;
+  font-weight: var(--font-weight-normal);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0;
+  color: var(--color-text-secondary);
 }
 
-.settings-section label {
-    display: block;
-    margin-bottom: 10px;
-    cursor: pointer;
-}
-
-.settings-section label.scale-setting {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    flex-wrap: nowrap;
-}
-
-.settings-section label span {
-    display: inline-block;
-    margin-right: 10px;
-    vertical-align: middle;
-}
-
-.settings-section label.scale-setting span {
-    width: auto;
-    margin-right: 0;
-}
-
-.settings-section label.scale-setting span:first-child {
-    white-space: nowrap;
-}
-
-.settings-section label input[type="radio"] {
-    accent-color: #4a00e0;
-    vertical-align: middle;
-}
-
-/* 布局设置样式 */
 .setting-group {
-    margin-bottom: 15px;
+  margin-bottom: var(--space-4);
 }
 
 .setting-label {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
-/* 已移除 scale-setting 特殊样式，使用统一的 setting-label 样式 */
-
 .setting-name {
-    font-weight: normal;
-    font-size: 14px;
-    white-space: nowrap;
-    opacity: 0.8;
+  font-weight: var(--font-weight-normal);
+  font-size: var(--font-size-base);
+  white-space: nowrap;
+  opacity: 0.9;
+  color: var(--color-text-secondary);
 }
 
 .setting-name .setting-value {
-    margin-left: 0.5em;
-}
-
-.setting-value {
-    font-weight: normal;
-    color: #fff;
-}
-
-.setting-unit {
-    margin-left: 2px;
-    white-space: nowrap;
+  margin-left: 0.5em;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
 }
 
 .glass-dialog.light-bg .setting-value {
-    color: #333;
-    font-weight: normal;
+  color: var(--color-text-primary);
 }
 
 .setting-slider {
-    width: 100%;
-    margin: 5px 0 0 0;
+  width: 100%;
+  margin: var(--space-2) 0 0 0;
 }
 
-.settings-section:first-child {
-    grid-column: 1 / -1;
-}
-
-.settings-section:nth-child(2) {
-    grid-column: 1 / -1;
-}
-
-.dialog-actions {
-    grid-column: 1 / -1;
-    margin-top: 10px;
-}
-
-/* 颜色模式按钮 */
+/* Color Mode Buttons */
 .color-mode-buttons {
-    display: flex;
-    gap: 10px;
-    margin-top: 10px;
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
 }
 
 .color-mode-buttons .glass-btn {
-    flex: 1;
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 10px 20px;
-    min-height: 44px;
-    gap: 5px;
-    font-size: 13px;
+  flex: 1;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3) var(--space-4);
+  min-height: 44px;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+}
+
+.color-mode-buttons .glass-btn.active {
+  background: rgba(100, 100, 255, 0.3);
+  color: white;
+  border-color: rgba(100, 100, 255, 0.5);
 }
 
 .glass-dialog.light-bg .color-mode-buttons .glass-btn.active {
-    background: rgba(100, 100, 255, 0.7);
-    color: white;
-    border-color: rgba(100, 100, 255, 0.9);
+  background: rgba(100, 100, 255, 0.7);
+  color: white;
+  border-color: rgba(100, 100, 255, 0.9);
 }
 
-/* 确保自动模式下按钮也有高亮显示 */
-.color-mode-buttons .glass-btn.active {
-    background: rgba(100, 100, 255, 0.3);
-    color: white;
-    border-color: rgba(100, 100, 255, 0.5);
+/* Settings Button Groups */
+.settings-buttons {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
-.glass-dialog:not(.light-bg) .color-mode-buttons .glass-btn.active {
-    background: rgba(100, 100, 255, 0.3);
-    color: white;
-    border-color: rgba(100, 100, 255, 0.5);
-}
-
-
-
-
-.data-management .glass-btn {
-    flex: 1;
-    margin-top: 0 !important;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 10px 20px;
-    min-height: 44px;
-}
-
-/* 统一设置按钮样式 */
-.settings-buttons { 
-    display: flex; 
-    gap: 15px; 
-    margin-bottom: 15px; 
-}
-
-.settings-button.glass-btn { 
-    flex: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 10px 20px;
-    min-height: 44px;
-    height: 44px;
-    box-sizing: border-box;
-    margin: 0;
-    line-height: 1;
-    text-align: center;
-    white-space: nowrap;
+.settings-button.glass-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3) var(--space-5);
+  min-height: 44px;
+  height: 44px;
+  box-sizing: border-box;
+  margin: 0;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .settings-button.glass-btn span {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    text-align: center;
-    margin-right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-align: center;
+  margin-right: 0;
 }
 
-/* 背景设置按钮特定样式 */
-.bg-options {
-    display: flex;
-    gap: 15px;
-    margin-bottom: 15px;
+/* Background Settings */
+.bg-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
-.bg-options .settings-button.glass-btn {
-    flex-direction: column;
-    gap: 5px;
-    font-size: 13px;
-    line-height: 1;
-    align-items: center;
-    justify-content: center;
-    height: 66px;
-    min-height: 66px;
-    text-align: center;
-    white-space: nowrap;
+.bg-quality-segmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--liquid-stroke);
+  background: var(--liquid-fill);
+  box-shadow: var(--liquid-inner-shadow);
 }
 
-/* 为随机必应壁纸按钮单独设置样式 */
-#bg-bing-btn {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    height: 66px;
-    min-height: 66px;
-    text-align: center;
-    overflow: hidden;
+/* 背景模式选择器：图标卡片式，刻意区别于上方纯文字的布局/外观/数据标签页 */
+.bg-mode-segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
 }
 
-/* 按钮图标 */
-#bg-bing-btn svg {
-    transition: opacity 0.3s ease, transform 0.3s ease;
+.bg-mode-segmented .seg-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: 68px;
+  padding: var(--space-3) var(--space-2);
+  border: 1px solid var(--liquid-stroke);
+  border-radius: var(--radius-md);
+  background: var(--liquid-fill);
+  box-shadow: var(--liquid-inner-shadow);
+  transition: color var(--duration-fast) var(--ease-out-cubic),
+              background var(--duration-fast) var(--ease-out-cubic),
+              border-color var(--duration-fast) var(--ease-out-cubic),
+              box-shadow var(--duration-fast) var(--ease-out-cubic);
 }
 
-/* 按钮文字 */
-#bg-bing-btn .btn-text {
-    font-size: 13px;
-    letter-spacing: 0.02em;
-    line-height: 1;
+.bg-mode-segmented .seg-btn svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 
-/* 加载动画容器 */
-#bg-bing-btn .btn-loader {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    position: absolute;
-    top: 14px;
+.bg-mode-segmented .seg-btn:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-glass-border-hover);
+}
+
+.bg-mode-segmented .seg-btn.active {
+  border-color: var(--color-accent);
+  background: var(--liquid-fill-hover);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: var(--liquid-shadow);
+}
+
+.seg-btn {
+  flex: 1;
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: calc(var(--radius-md) - 4px);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-fast) var(--ease-out-cubic),
+              background var(--duration-fast) var(--ease-out-cubic),
+              box-shadow var(--duration-fast) var(--ease-out-cubic);
+}
+
+.seg-btn:hover {
+  color: var(--color-text-primary);
+}
+
+.seg-btn.active {
+  background: var(--liquid-fill-hover);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: var(--liquid-shadow);
+}
+
+.seg-btn.small {
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  font-size: 12px;
+}
+
+.bg-subpanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--liquid-stroke);
+  background: var(--liquid-fill);
+  animation: bg-subpanel-in var(--duration-normal) var(--ease-out-cubic);
+}
+
+.bg-subpanel[hidden] {
+  display: none;
+}
+
+@keyframes bg-subpanel-in {
+  from {
     opacity: 0;
-    transform: scale(0.8);
-    transition: opacity 0.3s ease, transform 0.3s ease;
-    pointer-events: none;
-}
-
-/* 加载状态 */
-#bg-bing-btn.loading svg {
-    opacity: 0;
-    transform: scale(0.8);
-}
-
-#bg-bing-btn.loading .btn-loader {
+    transform: translateY(-4px);
+  }
+  to {
     opacity: 1;
-    transform: scale(1);
+    transform: translateY(0);
+  }
 }
 
-/* 加载圆点 */
+.bg-subpanel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.bg-subpanel-label {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.wall-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--liquid-stroke);
+  background-color: var(--color-glass-bg);
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+}
+
+.wall-preview-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.wall-preview-empty svg {
+  width: 28px;
+  height: 28px;
+  opacity: 0.6;
+}
+
+.wall-preview.has-image .wall-preview-empty {
+  display: none;
+}
+
+.wall-refresh {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--liquid-stroke);
+  border-radius: var(--radius-full);
+  background: var(--liquid-fill);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  box-shadow: var(--liquid-shadow);
+  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  backdrop-filter: var(--liquid-backdrop);
+  transition: background var(--duration-fast) var(--ease-out-cubic),
+              transform var(--duration-fast) var(--ease-out-cubic);
+}
+
+.wall-refresh:hover {
+  background: var(--liquid-fill-hover);
+  transform: scale(1.06);
+}
+
+.wall-refresh svg {
+  width: 16px;
+  height: 16px;
+  transition: opacity var(--duration-normal) var(--ease-out-cubic);
+}
+
+.wall-refresh .btn-loader {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-normal) var(--ease-out-cubic);
+}
+
+.wall-refresh.loading svg {
+  opacity: 0;
+}
+
+.wall-refresh.loading .btn-loader {
+  opacity: 1;
+}
+
+.bg-subpanel-row .wall-refresh {
+  position: static;
+  flex-shrink: 0;
+}
+
+.glass-select {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--liquid-stroke);
+  background: var(--liquid-fill);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  outline: 0;
+  transition: border-color var(--duration-fast) var(--ease-out-cubic);
+}
+
+.glass-select:hover,
+.glass-select:focus-visible {
+  border-color: var(--color-accent);
+}
+
+.glass-select option {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.bg-custom-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.bg-custom-actions .glass-btn {
+  flex: 1;
+}
+
 .loader-dot {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: currentColor;
-    animation: loader-wave 1.2s ease-in-out infinite;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: loader-wave 1.2s ease-in-out infinite;
 }
 
 .loader-dot:nth-child(1) { animation-delay: 0s; }
@@ -1046,276 +1853,361 @@ input[type="range"]::-moz-range-thumb {
 .loader-dot:nth-child(3) { animation-delay: 0.3s; }
 
 @keyframes loader-wave {
-    0%, 60%, 100% {
-        transform: scale(0.6);
-        opacity: 0.3;
-    }
-    30% {
-        transform: scale(1);
-        opacity: 1;
-    }
+  0%, 60%, 100% {
+    transform: scale(0.6);
+    opacity: 0.3;
+  }
+  30% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
-/* 为上传图片按钮单独设置样式 */
-#bg-upload-input + label {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    cursor: pointer;
-    height: 66px;
-    min-height: 66px;
-    text-align: center;
+.data-management svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 
-#bg-upload-input + label span {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    text-align: center;
-    margin-right: 0;
-}
-
-/* 确保SVG图标在按钮中正确显示 */
-.bg-options svg {
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-}
-
-/* 数据管理按钮特定样式 */
+/* Data Management */
 .data-management {
-    display: flex;
-    gap: 15px;
-    margin-bottom: 15px;
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .data-management .settings-button.glass-btn {
-    flex-direction: column;
-    gap: 5px;
-    font-size: 13px;
-    line-height: 1;
-    height: 66px;
-    min-height: 66px;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    white-space: nowrap;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: 1;
+  height: 66px;
+  min-height: 66px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap;
 }
 
-#export-data-btn span {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    text-align: center;
-    margin-right: 0;
-}
-
-/* 确保数据管理按钮中的SVG图标正确显示 */
-.data-management svg {
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-}
-
-/* 确保label元素与button元素高度一致 */
 .settings-buttons label.settings-button.glass-btn {
-    flex: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 10px 20px;
-    min-height: 66px;
-    height: 66px;
-    box-sizing: border-box;
-    margin: 0;
-    line-height: 1;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    white-space: nowrap;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3) var(--space-5);
+  min-height: 66px;
+  height: 66px;
+  box-sizing: border-box;
+  margin: 0;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
 }
 
-/* 确保数据管理按钮中的label元素正确显示图标 */
 .data-management label.settings-button.glass-btn {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    text-align: center;
-    white-space: nowrap;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  text-align: center;
+  white-space: nowrap;
 }
 
-#import-data-input + label span {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    text-align: center;
-    margin-right: 0;
+/* ------------------------------------------
+   12. Range Input (Slider)
+   ------------------------------------------ */
+input[type="range"] {
+  width: 100%;
+  margin: var(--space-2) 0 var(--space-5) 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--liquid-fill);
+  outline: none;
 }
 
-.settings-buttons label.settings-button.glass-btn span {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    text-align: center;
-    margin-right: 0;
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transition: transform var(--duration-fast) var(--ease-out-cubic);
 }
 
-/* 右键菜单 */
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* ------------------------------------------
+   13. Context Menu
+   ------------------------------------------ */
 .context-menu {
-    position: fixed;
-    z-index: 1000;
-    width: 120px;
-    border-radius: 12px;
-    padding: 5px 0;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateY(10px);
-    transition: opacity 0.2s, transform 0.2s, visibility 0.2s;
-    /* 使用与其它玻璃元素相同的样式 */
-    background: var(--capsule-bg);
-    border: 1px solid var(--capsule-border);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 16px 32px rgba(0, 0, 0, .12);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    color: var(--text-primary);
+  position: fixed;
+  z-index: 1000;
+  width: 120px;
+  border-radius: var(--radius-md);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px);
+  transition:
+    opacity var(--duration-fast) var(--ease-out-cubic),
+    transform var(--duration-fast) var(--ease-out-cubic),
+    visibility var(--duration-fast);
+  background: var(--liquid-fill);
+  border: 1px solid var(--liquid-stroke);
+  box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
+  /* 菜单只用纯模糊、不引用共享的 SVG 位移滤镜：菜单项悬浮会触发重绘，
+     若共享 #liquid_glass_filter，重栅格化会波及远处磁贴的 backdrop-filter，
+     使最右列磁贴右侧出现亮度异常；
+     模糊略高于普通玻璃组件，强化菜单“浮起”的层次感 */
+  -webkit-backdrop-filter: blur(calc(var(--liquid-blur) + 3px));
+  backdrop-filter: blur(calc(var(--liquid-blur) + 3px));
+  color: var(--color-text-primary);
+  /* 强制常驻独立合成层：菜单显示/隐藏时不触发网格磁贴 backdrop-filter 重合成 */
+  will-change: transform, opacity;
 }
 
 .context-menu:not(.hidden) {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(0);
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 .menu-item {
-    padding: 10px 15px;
-    color: var(--text-primary);
-    cursor: pointer;
-    font-size: 14px;
-    transition: background 0.2s ease;
-    position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  transition: background var(--duration-fast) var(--ease-out-cubic);
+  position: relative;
+  /* 独立合成层：悬浮背景色变化只重绘本项，不触发菜单 backdrop-filter 重采样 */
+  transform: translateZ(0);
 }
 
 .menu-item:hover {
-    background: var(--capsule-hover);
+  background: var(--liquid-fill-hover);
 }
 
 .menu-item.delete:hover {
-    background: rgba(255, 123, 123, 0.2);
-    color: #ff6b6b;
+  background: rgba(255, 123, 123, 0.2);
+  color: #ff6b6b;
 }
 
-.menu-divider {
-    height: 1px;
-    background: rgba(255, 255, 255, 0.1);
-    margin: 5px 0;
-}
-
-.hidden {
-    visibility: hidden;
-    opacity: 0;
-    pointer-events: none;
-}
-
-/* Favicon 回退文字 */
-.favicon-fallback {
-    width: 42%;
-    height: 42%;
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    font-weight: 600;
-    color: var(--text-primary);
-    pointer-events: none;
-    text-shadow: var(--text-shadow);
-}
-
-.shortcut-color-dark .favicon-fallback {
-    color: #333 !important;
-}
-
-.shortcut-color-light .favicon-fallback {
-    color: white !important;
-}
-
-/* 右键菜单颜色模式适配 */
 .context-menu.text-color-dark .menu-item {
-    color: #333 !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+  color: #333 !important;
+  text-shadow: var(--shadow-text-light);
 }
 
 .context-menu.text-color-light .menu-item {
-    color: #ffffff !important;
-    text-shadow: var(--text-shadow); /* 使用统一的文字阴影变量 */
+  color: #ffffff !important;
+  text-shadow: var(--shadow-text);
 }
 
-/* 移除默认颜色设置，让颜色模式自动控制 */
+.hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
 
-/* Toast 提醒气泡 */
+/* ------------------------------------------
+   14. Toast Notifications
+   ------------------------------------------ */
 .toast-container {
-    position: fixed;
-    bottom: 60px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 9999;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    pointer-events: none;
+  position: fixed;
+  bottom: var(--space-12);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  pointer-events: none;
+}
+
+/* dialog 内部的气泡容器：dialog 为 position: relative，改用绝对定位悬浮于弹窗底部，
+   随 dialog 一同处于顶层，避免被 ::backdrop 模糊遮罩盖住 */
+.toast-container--dialog {
+  position: absolute;
+  bottom: var(--space-6);
+  z-index: 10;
+}
+
+/* dialog 有 overflow: hidden，限制气泡宽度并允许换行，避免被裁剪 */
+.toast-container--dialog .toast {
+  white-space: normal;
+  text-align: center;
+  max-width: min(90vw, 400px);
 }
 
 .toast {
-    background: rgba(30, 30, 40, 0.85);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 16px;
-    padding: 12px 24px;
-    color: #fff;
-    font-size: 14px;
-    font-family: 'Segoe UI', sans-serif;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, .2), 0 8px 32px rgba(0, 0, 0, .2);
-    opacity: 0;
-    transform: translateY(20px) scale(0.95);
-    transition: opacity 0.3s ease, transform 0.3s ease;
-    pointer-events: auto;
-    white-space: nowrap;
-    max-width: 90vw;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  background: var(--liquid-fill-strong);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-6);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  font-family: var(--font-family-base);
+  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  backdrop-filter: var(--liquid-backdrop);
+  box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+  transition:
+    opacity var(--duration-normal) var(--ease-out-cubic),
+    transform var(--duration-normal) var(--ease-out-cubic);
+  pointer-events: auto;
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 状态指示圆点（取代彩色边框圈，更克制） */
+.toast::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  margin-right: var(--space-2);
+  vertical-align: middle;
+  background: var(--color-text-muted);
 }
 
 .toast.show {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
 .toast.hide {
-    opacity: 0;
-    transform: translateY(-10px) scale(0.95);
+  opacity: 0;
+  transform: translateY(-10px) scale(0.95);
 }
 
-.toast.toast-error {
-    border-color: rgba(255, 100, 100, 0.3);
+.toast.toast-success::before {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.55);
 }
 
-.toast.toast-success {
-    border-color: rgba(100, 255, 150, 0.3);
+.toast.toast-error::before {
+  background: #f87171;
+  box-shadow: 0 0 8px rgba(248, 113, 113, 0.55);
 }
 
 body.light-bg .toast {
-    background: rgba(245, 245, 247, 0.9);
-    color: #333;
-    border-color: rgba(0, 0, 0, 0.1);
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, .1), 0 8px 32px rgba(0, 0, 0, .08);
+  background: var(--liquid-fill-strong);
+  color: var(--color-text-primary);
+  box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
+}
+
+/* ------------------------------------------
+   15. Utilities
+   ------------------------------------------ */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Focus visible for accessibility */
+.glass-element:focus-visible,
+.glass-btn:focus-visible,
+.glass-input:focus-visible,
+.shortcut-item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------
+   16. Media Queries
+   ------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .blob {
+    transition: none;
+  }
+}
+
+/* Mobile responsiveness */
+@media (max-width: 640px) {
+  body {
+    padding-top: var(--space-8);
+  }
+
+  .main-layout {
+    padding: var(--space-4);
+    gap: var(--space-6);
+    max-width: 100%;
+  }
+
+  .search-wrapper {
+    max-width: 100%;
+  }
+
+  .grid-container {
+    gap: var(--space-3);
+    max-width: calc(100vw - var(--space-4));
+    padding: var(--space-2);
+  }
+
+  .settings-modal {
+    width: 95vw;
+    padding: var(--space-5);
+  }
+
+  .glass-dialog {
+    padding: var(--space-6);
+    min-width: auto;
+    width: 90vw;
+  }
+
+  .color-mode-buttons {
+    flex-direction: column;
+  }
+
+  .settings-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-buttons,
+  .bg-custom-actions,
+  .data-management {
+    flex-direction: column;
+  }
 }
