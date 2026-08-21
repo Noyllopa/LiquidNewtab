@@ -5,25 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>New Tab</title>
     <link rel="stylesheet" href="style.css">
-    <script>
-        // 同步读取上次计算的主题并立即应用，避免首次绘制时闪现默认深色
-        (function() {
-            try {
-                var mode = localStorage.getItem('_colorMode') || 'auto';
-                var t;
-                if (mode === 'light' || mode === 'dark') {
-                    t = mode;
-                } else {
-                    // 自动模式：用上次权威计算结果，缺失时回退系统偏好
-                    t = localStorage.getItem('_resolvedTheme')
-                        || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-                }
-                if (t === 'light' || t === 'dark') {
-                    document.documentElement.classList.add('theme-' + t);
-                }
-            } catch(e) {}
-        })();
-    </script>
+    <!-- MV3 CSP 禁止内联脚本，反闪烁初始化移至外部文件；同步引入保证首绘前执行 -->
+    <script src="theme-init.js"></script>
     <style>
         /* 预加载背景图片，加载完成后渐变显示 */
         .preloaded-bg {
@@ -102,6 +85,7 @@
                 <input 
                     type="text" 
                     id="search-input" 
+                    placeholder="搜索或输入网址"
                     autocomplete="off"
                     aria-label="搜索关键词"
                     enterkeyhint="search"
@@ -233,8 +217,8 @@
         <div class="settings-content">
             <div class="settings-tabs" role="tablist" aria-label="设置分类">
                 <button class="settings-tab active" id="settings-tab-layout" data-settings-tab="layout" role="tab" aria-selected="true" aria-controls="settings-panel-layout" type="button">布局</button>
-                <button class="settings-tab" id="settings-tab-appearance" data-settings-tab="appearance" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" type="button">外观</button>
-                <button class="settings-tab" id="settings-tab-data" data-settings-tab="data" role="tab" aria-selected="false" aria-controls="settings-panel-data" type="button">数据</button>
+                <button class="settings-tab" id="settings-tab-appearance" data-settings-tab="appearance" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" tabindex="-1" type="button">外观</button>
+                <button class="settings-tab" id="settings-tab-data" data-settings-tab="data" role="tab" aria-selected="false" aria-controls="settings-panel-data" tabindex="-1" type="button">数据</button>
             </div>
 
             <!-- 布局设置 -->

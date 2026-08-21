@@ -470,24 +470,20 @@ input:focus-visible,
 }
 
 /* Text Color Utilities */
-.text-color-dark #search-input,
-.text-color-dark .engine-label {
+.text-color-dark #search-input {
   color: #333 !important;
 }
 
-.text-color-light #search-input,
-.text-color-light .engine-label {
+.text-color-light #search-input {
   color: white !important;
   text-shadow: var(--shadow-text);
 }
 
-.icon-color-dark .search-icon,
 .icon-color-dark svg {
   color: #333 !important;
   stroke: #333 !important;
 }
 
-.icon-color-light .search-icon,
 .icon-color-light svg {
   color: white !important;
   stroke: white !important;
@@ -599,29 +595,6 @@ input:focus-visible,
   border: 2px solid var(--color-accent);
   border-radius: inherit;
   pointer-events: none;
-}
-
-/* Favicon Fallback */
-.favicon-fallback {
-  width: 42%;
-  height: 42%;
-  margin-bottom: var(--space-3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-  pointer-events: none;
-  text-shadow: var(--shadow-text);
-}
-
-.shortcut-color-dark .favicon-fallback {
-  color: #333 !important;
-}
-
-.shortcut-color-light .favicon-fallback {
-  color: white !important;
 }
 
 /* Add Button */
@@ -966,10 +939,6 @@ input:focus-visible,
 
 .glass-btn.danger {
   color: var(--color-danger);
-}
-
-.glass-btn.full-width {
-  width: 100%;
 }
 
 .glass-dialog.light-bg .glass-btn {

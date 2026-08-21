@@ -39,10 +39,13 @@ const FAVICON_SOURCES = [
     }
 ];
 
-const CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
+const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 与 script.js 的 FAVICON_CACHE_TTL 保持一致
 const SOURCE_TIMEOUT = 3000;
 const MAX_FAVICON_BLOB_BYTES = 128 * 1024;
-const MAX_FAVICON_CACHE_ENTRIES = 80;
+const MAX_REMOTE_IMAGE_BYTES = 16 * 1024 * 1024; // 远程壁纸响应体大小上限（与 script.js 一致）
+const MAX_JSON_BYTES = 5 * 1024 * 1024;          // 接口文本响应体大小上限
+const FAILED_FAVICON_TTL = 24 * 60 * 60 * 1000;  // 图标获取失败的负缓存时长，期内不再重试
+const MAX_FAVICON_CACHE_ENTRIES = 80; // 与 script.js 的 MAX_EXPORTED_FAVICONS 保持一致
 const ALLOWED_PAGE_PROTOCOLS = new Set(['http:', 'https:']);
 
 function normalizePageUrl(value) {
@@ -82,16 +85,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         handleGetBestFavicon(request.url, request.forceRefresh)
             .then(sendResponse)
             .catch(() => {
-                sendResponse({ dataUrl: null, useChromeApi: true });
+                sendResponse({ dataUrl: null });
             });
         return true;
     }
 
     if (request.action === 'fetchWallpaper') {
-        console.log('[BG] fetchWallpaper 收到请求:', request.url);
         handleFetchWallpaper(request.url, request.timeoutMs || 60000)
             .then((result) => {
-                console.log('[BG] fetchWallpaper 成功, dataUrl 长度:', result.dataUrl ? result.dataUrl.length : 0);
                 sendResponse(result);
             })
             .catch((error) => {
@@ -102,10 +103,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'fetchJson') {
-        console.log('[BG] fetchJson 收到请求:', request.url);
         handleFetchJson(request.url, request.timeoutMs || 30000)
             .then((data) => {
-                console.log('[BG] fetchJson 成功, type:', data.type);
                 sendResponse({ success: true, data });
             })
             .catch((error) => {
@@ -116,13 +115,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+// 有界读取响应体：超过 maxBytes 立即中止，防止超大远程文件耗尽 Service Worker 内存
+async function readBodyWithCap(response, maxBytes) {
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        throw new Error('远程资源过大');
+    }
+
+    if (!response.body) {
+        const blob = await response.blob();
+        if (blob.size > maxBytes) throw new Error('远程资源过大');
+        return blob;
+    }
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > maxBytes) {
+            try { await reader.cancel(); } catch {}
+            throw new Error('远程资源过大');
+        }
+        chunks.push(value);
+    }
+    return new Blob(chunks, { type: response.headers.get('content-type') || '' });
+}
+
 async function handleFetchWallpaper(url, timeoutMs) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
         const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const blob = await response.blob();
+        const blob = await readBodyWithCap(response, MAX_REMOTE_IMAGE_BYTES);
         if (blob.type && blob.type !== 'application/octet-stream' && !blob.type.startsWith('image/')) {
             throw new Error('远程资源不是图片');
         }
@@ -142,7 +170,8 @@ async function handleFetchJson(url, timeoutMs) {
             redirect: 'follow'
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const text = await response.text();
+        const blob = await readBodyWithCap(response, MAX_JSON_BYTES);
+        const text = await blob.text();
         // 尝试解析为 JSON；若失败则返回原始文本（可能是 XML），由调用端处理
         try {
             return { type: 'json', data: JSON.parse(text) };
@@ -157,18 +186,18 @@ async function handleFetchJson(url, timeoutMs) {
 async function handleGetBestFavicon(pageUrl, forceRefresh) {
     const normalizedUrl = normalizePageUrl(pageUrl);
     if (!normalizedUrl) {
-        return { dataUrl: null, useChromeApi: true };
+        return { dataUrl: null };
     }
 
     let domain;
     try {
         domain = new URL(normalizedUrl).hostname;
     } catch {
-        return { dataUrl: null, useChromeApi: true };
+        return { dataUrl: null };
     }
 
     if (!domain) {
-        return { dataUrl: null, useChromeApi: true };
+        return { dataUrl: null };
     }
 
     const cacheKey = `favicon_${domain}`;
@@ -176,10 +205,16 @@ async function handleGetBestFavicon(pageUrl, forceRefresh) {
     if (!forceRefresh) {
         try {
             const cached = await chrome.storage.local.get(cacheKey);
-            if (cached[cacheKey] && cached[cacheKey].dataUrl) {
-                const entry = cached[cacheKey];
-                if (Date.now() - entry.timestamp < CACHE_TTL) {
-                    return { dataUrl: entry.dataUrl, fromCache: true };
+            const entry = cached[cacheKey];
+            if (entry) {
+                if (entry.dataUrl) {
+                    if (Date.now() - entry.timestamp < CACHE_TTL) {
+                        return { dataUrl: entry.dataUrl, fromCache: true };
+                    }
+                } else if (entry.failedAt && Date.now() - entry.failedAt < FAILED_FAVICON_TTL) {
+                    // 负缓存：近期获取失败的域名在 TTL 内直接返回，
+                    // 避免每次渲染都对死域名并发请求全部图标源
+                    return { dataUrl: null };
                 }
             }
         } catch {}
@@ -200,7 +235,10 @@ async function handleGetBestFavicon(pageUrl, forceRefresh) {
     }
 
     if (!bestResult || bestScore < 0) {
-        return { dataUrl: null, useChromeApi: true };
+        try {
+            await chrome.storage.local.set({ [cacheKey]: { failedAt: Date.now() } });
+        } catch {}
+        return { dataUrl: null };
     }
 
     const dataUrl = await blobToDataUrl(bestResult.blob);
@@ -216,7 +254,6 @@ async function handleGetBestFavicon(pageUrl, forceRefresh) {
                 height: bestResult.height
             }
         });
-        prunePendingWrites++;
         await pruneFaviconCache();
     } catch {}
 
@@ -225,25 +262,21 @@ async function handleGetBestFavicon(pageUrl, forceRefresh) {
 
 async function fetchAllSources(pageUrl) {
     const promises = FAVICON_SOURCES.map(async (source) => {
+        // 超时须覆盖响应头 + 响应体下载全过程（此前 finally 只包住 fetch 阶段，
+        // 慢速响应体的 blob() 下载不受 SOURCE_TIMEOUT 约束）
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), SOURCE_TIMEOUT);
         try {
             const url = source.getUrl(pageUrl);
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), SOURCE_TIMEOUT);
-
-            let response;
-            try {
-                response = await fetch(url, {
-                    signal: controller.signal,
-                    redirect: 'follow'
-                });
-            } finally {
-                clearTimeout(timeoutId);
-            }
+            const response = await fetch(url, {
+                signal: controller.signal,
+                redirect: 'follow'
+            });
 
             if (!response.ok) return { success: false };
 
-            const blob = await response.blob();
-            if (blob.size < 50 || blob.size > MAX_FAVICON_BLOB_BYTES) return { success: false };
+            const blob = await readBodyWithCap(response, MAX_FAVICON_BLOB_BYTES);
+            if (blob.size < 50) return { success: false };
 
             let dims;
             try {
@@ -263,6 +296,8 @@ async function fetchAllSources(pageUrl) {
             };
         } catch {
             return { success: false };
+        } finally {
+            clearTimeout(timeoutId);
         }
     });
 
@@ -273,37 +308,53 @@ async function fetchAllSources(pageUrl) {
         .filter(r => r.success);
 }
 
-// 简单的频率限制：缓存写入计数与时间双触发，避免每次写都 get(null) 把数 MB 的 customBg 也读进 SW
-let prunePendingWrites = 0;
-let lastPruneTime = 0;
+// 简单的频率限制：缓存写入计数与时间双触发，避免每次写都 get(null) 把数 MB 的 customBg 也读进 SW。
+// 计数状态持久化到 storage——MV3 Service Worker 会被频繁回收，纯内存计数每次唤醒都归零，
+// 会导致 prune 几乎在每次写入时都执行全量读取
+const PRUNE_STATE_KEY = '_pruneState';
 const PRUNE_WRITE_THRESHOLD = 5;
 const PRUNE_TIME_THRESHOLD = 10 * 60 * 1000; // 10 分钟
 
 async function pruneFaviconCache(force = false) {
-    const now = Date.now();
-    if (!force) {
-        if (prunePendingWrites < PRUNE_WRITE_THRESHOLD &&
-            now - lastPruneTime < PRUNE_TIME_THRESHOLD) {
-            return;
+    let state = { count: 0, lastPruneTime: 0 };
+    try {
+        const saved = await chrome.storage.local.get(PRUNE_STATE_KEY);
+        if (saved[PRUNE_STATE_KEY] && typeof saved[PRUNE_STATE_KEY] === 'object') {
+            state = saved[PRUNE_STATE_KEY];
         }
+    } catch {}
+
+    const now = Date.now();
+    const shouldPrune = force ||
+        Number(state.count || 0) >= PRUNE_WRITE_THRESHOLD ||
+        now - Number(state.lastPruneTime || 0) >= PRUNE_TIME_THRESHOLD;
+
+    if (!shouldPrune) {
+        try {
+            await chrome.storage.local.set({
+                [PRUNE_STATE_KEY]: { count: Number(state.count || 0) + 1, lastPruneTime: Number(state.lastPruneTime || 0) }
+            });
+        } catch {}
+        return;
     }
-    prunePendingWrites = 0;
-    lastPruneTime = now;
 
     const items = await chrome.storage.local.get(null);
     const faviconEntries = Object.entries(items)
         .filter(([key, value]) => key.startsWith('favicon_') && value && typeof value === 'object')
         .sort((a, b) => Number(b[1].timestamp || 0) - Number(a[1].timestamp || 0));
 
-    if (faviconEntries.length <= MAX_FAVICON_CACHE_ENTRIES) return;
-
-    const keysToRemove = faviconEntries
-        .slice(MAX_FAVICON_CACHE_ENTRIES)
-        .map(([key]) => key);
-
-    if (keysToRemove.length > 0) {
-        await chrome.storage.local.remove(keysToRemove);
+    if (faviconEntries.length > MAX_FAVICON_CACHE_ENTRIES) {
+        const keysToRemove = faviconEntries
+            .slice(MAX_FAVICON_CACHE_ENTRIES)
+            .map(([key]) => key);
+        if (keysToRemove.length > 0) {
+            await chrome.storage.local.remove(keysToRemove);
+        }
     }
+
+    try {
+        await chrome.storage.local.set({ [PRUNE_STATE_KEY]: { count: 0, lastPruneTime: now } });
+    } catch {}
 }
 
 async function getImageDimensions(blob) {

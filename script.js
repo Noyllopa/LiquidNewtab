@@ -56,9 +56,7 @@ const MAX_ICON_DATA_URL_CHARS = 750 * 1024;
 // 自定义背景 data URL 的字符数安全上限：需容纳 4K 图经 JPEG 压缩后的 base64
 // （高细节 4K q0.7 可达 7–11MB 字符），故放宽至 12MB；仍作为防超长字符串的安全网
 const MAX_BACKGROUND_DATA_URL_CHARS = 12 * 1024 * 1024;
-// 必应 4K 超清壁纸接口可能返回较大图片，放宽远程图片大小上限至 16MB（压缩在客户端进行）
-const MAX_REMOTE_IMAGE_BYTES = 16 * 1024 * 1024;
-const MAX_EXPORTED_FAVICONS = 80;
+const MAX_EXPORTED_FAVICONS = 80; // 与 background.js 的 MAX_FAVICON_CACHE_ENTRIES 保持一致
 const FAVICON_CONCURRENCY = 4;
 
 // --- 壁纸模式配置 ---
@@ -459,6 +457,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 切换模式/上传/移除背景时静默中断；bingAbortController 用于立即中止网络请求
     let bgActionToken = 0;
     let bingAbortController = null;
+    // 画质切换时有抓取进行中而被迫跳过：登记后待其结束自动按新画质补一次抓取
+    let bingRefetchPending = false;
 
     // 最高优先级：立即确认颜色模式，须在 renderShortcuts / loadBgSettings 等耗时操作之前执行
     const [savedColorMode, savedBgMode] = await Promise.all([
@@ -687,9 +687,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             preloadBg = document.getElementById('preload-bg');
         }
         
-        // 清除存储的主题信息
-        await Storage.remove('backgroundThemeInfo');
-        
         if (safeBgUrl) {
             // 直接应用背景图片，不再等待onload事件以提升加载速度
             if (preloadBg) {
@@ -708,7 +705,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 仅自动模式下检测背景亮度；手动模式是用户显式选择，不被壁纸亮度覆盖
             const colorModeNow = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
             if (colorModeNow === 'auto') {
-                await detectBackgroundColor();
+                await detectBackgroundColor(safeBgUrl);
             }
         } else {
             // 移除背景图片
@@ -735,21 +732,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     let bingInterval = DEFAULT_BING_INTERVAL;
 
     // 应用当前模式对应的背景
-    async function applyCurrentBackground() {
+    // preloaded：调用方已读取的壁纸值（可选），避免重复把数 MB 的 data URL 从 storage 读入内存
+    async function applyCurrentBackground(preloaded = {}) {
         if (bgMode === 'bing') {
-            const cached = sanitizeBackgroundValue(await Storage.get('bingBg'));
+            const cached = 'bing' in preloaded
+                ? sanitizeBackgroundValue(preloaded.bing)
+                : sanitizeBackgroundValue(await Storage.get('bingBg'));
             await applyBackground(cached);
         } else if (bgMode === 'custom') {
-            const custom = sanitizeBackgroundValue(await Storage.get('customBg'));
+            const custom = 'custom' in preloaded
+                ? sanitizeBackgroundValue(preloaded.custom)
+                : sanitizeBackgroundValue(await Storage.get('customBg'));
             await applyBackground(custom);
         } else {
             await applyBackground(null);
         }
     }
 
-    // 更新自定义背景子面板内的预览缩略图
-    async function updatePreviews() {
-        const customImg = sanitizeBackgroundValue(await Storage.get('customBg'));
+    // 更新自定义背景子面板内的预览缩略图（preloadedCustom：调用方已读取的值，可选）
+    async function updatePreviews(preloadedCustom) {
+        const customImg = preloadedCustom !== undefined
+            ? sanitizeBackgroundValue(preloadedCustom)
+            : sanitizeBackgroundValue(await Storage.get('customBg'));
         if (customImg) {
             customPreview.style.backgroundImage = `url('${customImg}')`;
             customPreview.classList.add('has-image');
@@ -786,6 +790,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         try { localStorage.setItem('_bgMode', bgMode); } catch(e) {}
         syncBgModeUI();
         await applyCurrentBackground();
+        // 首次切到必应壁纸模式且尚无缓存时主动拉取，
+        // 否则要等到下次打开新标签页才会触发 fetchBing
+        if (bgMode === 'bing') {
+            const cached = sanitizeBackgroundValue(await Storage.get('bingBg'));
+            if (!cached) fetchBing(false);
+        }
     }
 
     // 加载壁纸设置并应用（初始化与数据导入后调用）
@@ -801,8 +811,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.setAttribute('aria-checked', active ? 'true' : 'false');
         });
         syncBgModeUI();
-        await updatePreviews();
-        await applyCurrentBackground();
+        // 一次性读齐两个大体积壁纸项，后续应用/预览直接复用，避免重复跨进程读取
+        const [bingBgValue, customBgValue] = await Promise.all([
+            Storage.get('bingBg'),
+            Storage.get('customBg')
+        ]);
+        await updatePreviews(customBgValue);
+        await applyCurrentBackground({ bing: bingBgValue, custom: customBgValue });
     }
 
     // 带超时保护的 sendMessage（防止 Service Worker 无响应时 Promise 永久挂起）
@@ -957,6 +972,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (bingAbortController === controller) bingAbortController = null;
             bingRefreshBtn.classList.remove('loading');
             bingRefreshBtn.disabled = false;
+            // 抓取期间用户切换过画质：仍处于必应壁纸模式时按最新画质补一次抓取
+            if (bingRefetchPending && bgMode === 'bing') {
+                bingRefetchPending = false;
+                fetchBing(true);
+            } else {
+                bingRefetchPending = false;
+            }
         }
     }
 
@@ -1105,18 +1127,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             await Storage.set('colorMode', mode);
             try { localStorage.setItem('_colorMode', mode); } catch(e) {}
             
-            // 如果是从特定颜色模式切换到自动模式，立即执行颜色检测
-            if (mode === 'auto') {
-                // 清除旧的主题信息，强制重新计算
-                await Storage.remove('backgroundThemeInfo');
-                // 执行颜色模式应用
-                await applyColorMode(mode);
-            } else {
-                // 应用指定的颜色模式
-                await applyColorMode(mode);
-                // 移除背景主题信息，避免自动模式切换回来时使用旧数据
-                await Storage.remove('backgroundThemeInfo');
-            }
+            // 应用新的颜色模式（auto 会按背景亮度/系统偏好重新计算）
+            await applyColorMode(mode);
         });
 
         button.addEventListener('keydown', (e) => {
@@ -1143,6 +1155,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (rawIcon && !icon) {
             showError('请输入有效的图标 URL 或上传图片');
+            return;
+        }
+
+        // 数量上限校验：超出上限的新增项会在渲染时被静默截断，必须在此拦截
+        if (!isEditing && shortcuts.length >= MAX_SHORTCUTS) {
+            showError(`快捷方式数量已达上限（${MAX_SHORTCUTS} 个）`);
             return;
         }
 
@@ -1264,7 +1282,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 
                 try {
                     ctx.drawImage(img, 0, 0, width, height);
-                    const dataURL = canvas.toDataURL('image/jpeg', quality);
+                    // 优先编码为 WebP：同画质体积更小且保留透明通道；
+                    // JPEG 不支持 alpha，会把透明像素填充为黑色。浏览器不支持时回退 JPEG
+                    let dataURL = canvas.toDataURL('image/webp', quality);
+                    if (!dataURL.startsWith('data:image/webp')) {
+                        dataURL = canvas.toDataURL('image/jpeg', quality);
+                    }
                     resolve(dataURL);
                 } catch (e) {
                     reject(new Error('图片压缩失败（可能受 CORS 限制）: ' + e.message));
@@ -1277,48 +1300,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
-    // 通过 fetch 获取图片为 Blob，绕过 CORS 限制
-    // externalSignal：可选的外部中断信号（用于在用户切换模式等操作时中止壁纸获取）
-    // timeoutMs：整体超时（覆盖响应头 + 图片体下载），默认 15 秒
-    async function fetchImageAsDataUrl(url, externalSignal = null, timeoutMs = 15000) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        const onExternalAbort = () => controller.abort();
-        if (externalSignal) {
-            if (externalSignal.aborted) controller.abort();
-            else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-        }
-        try {
-            const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const blob = await response.blob();
-            // 部分图片接口未正确设置 Content-Type（返回空或 octet-stream），
-            // 仅在明确为非图片类型时拒绝；真正的有效性校验交由下方 createImageBitmap 解码完成
-            if (blob.type && blob.type !== 'application/octet-stream' && !blob.type.startsWith('image/')) {
-                throw new Error('远程资源不是图片');
-            }
-            if (blob.size > MAX_REMOTE_IMAGE_BYTES) {
-                throw new Error('远程图片过大');
-            }
-
-            // 使用 ImageBitmap 解码并验证图片有效性
-            const bitmap = await createImageBitmap(blob);
-            bitmap.close();
-
-            // 转为 Data URL
-            return await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result);
-                reader.onerror = () => reject(new Error('Blob 转 Data URL 失败'));
-                reader.readAsDataURL(blob);
-            });
-        } finally {
-            clearTimeout(timeoutId);
-            if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
-        }
-    }
-
     // [壁纸功能 1] 背景模式切换
     bgModeButtons.forEach(btn => {
         btn.addEventListener('click', () => setBgMode(btn.dataset.bgMode));
@@ -1339,7 +1320,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 b.classList.toggle('active', active);
                 b.setAttribute('aria-checked', active ? 'true' : 'false');
             });
-            // 切换画质后立即按新画质重新获取壁纸
+            // 切换画质后立即按新画质重新获取壁纸；
+            // 若已有抓取进行中（fetchBing 的 loading 守卫会跳过），登记后由其 finally 补抓
+            if (bingRefreshBtn.classList.contains('loading')) {
+                bingRefetchPending = true;
+                return;
+            }
             await fetchBing(true);
         });
     });
@@ -1381,7 +1367,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     return;
                 }
                 await Storage.setImmediate('customBg', compressedImage);
-                await updatePreviews();
+                await updatePreviews(compressedImage);
                 // 仅自定义模式下立即应用，避免覆盖其他模式的背景
                 if (bgMode === 'custom') await applyBackground(compressedImage);
             } catch (err) {
@@ -1407,27 +1393,38 @@ document.addEventListener('DOMContentLoaded', async () => {
             bingAbortController = null;
         }
         await Storage.remove('customBg');
-        await Storage.remove('backgroundThemeInfo');
-        await updatePreviews();
+        await updatePreviews(null);
         if (bgMode === 'custom') await applyBackground(null);
         showToast('图片已移除', 'success');
     });
 
     // 数据导出功能
     exportDataBtn.addEventListener('click', async () => {
-        // 收集所有需要导出的数据
+        // 并行读取，避免大体积壁纸项串行等待
+        const [gridCols, gridSize, scale, customBg, bgMode, bingQuality, bingInterval, bingLastFetch, bingBg, colorMode] = await Promise.all([
+            Storage.get('gridCols', 5),
+            Storage.get('gridSize', 100),
+            Storage.get('scale', 100), // 显示比例设置
+            Storage.get('customBg'),
+            Storage.get('bgMode', 'default'),
+            Storage.get('bingQuality', 'uhd'),
+            Storage.get('bingInterval', DEFAULT_BING_INTERVAL),
+            Storage.get('bingLastFetch', 0),
+            Storage.get('bingBg'),
+            Storage.get('colorMode', 'auto') // 颜色模式设置
+        ]);
         const exportData = {
             shortcuts: sanitizeShortcuts(shortcuts, DEFAULT_SHORTCUTS),
-            gridCols: await Storage.get('gridCols', 5),
-            gridSize: await Storage.get('gridSize', 100),
-            scale: await Storage.get('scale', 100), // 添加显示比例设置
-            customBg: await Storage.get('customBg'),
-            bgMode: await Storage.get('bgMode', 'default'),
-            bingQuality: await Storage.get('bingQuality', 'uhd'),
-            bingInterval: await Storage.get('bingInterval', DEFAULT_BING_INTERVAL),
-            bingLastFetch: await Storage.get('bingLastFetch', 0),
-            bingBg: await Storage.get('bingBg'),
-            colorMode: await Storage.get('colorMode', 'auto') // 添加颜色模式设置
+            gridCols,
+            gridSize,
+            scale,
+            customBg,
+            bgMode,
+            bingQuality,
+            bingInterval,
+            bingLastFetch,
+            bingBg,
+            colorMode
         };
         
         // 收集所有favicon缓存
@@ -1473,6 +1470,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     importDataInput.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
+
+        // 导入会覆盖现有全部数据，属破坏性操作，须二次确认
+        if (!window.confirm('导入将覆盖当前的快捷方式、布局、外观与背景数据，确定继续吗？')) {
+            importDataInput.value = '';
+            return;
+        }
 
         const reader = new FileReader();
         reader.onload = async function(event) {
@@ -1531,9 +1534,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                     await Storage.setImmediate('bingInterval', importData.bingInterval);
                 }
 
-                // 清除主题信息，稍后应用背景时会重新检测
-                await Storage.remove('backgroundThemeInfo');
-                
                 // 导入颜色模式设置
                 if (importData.colorMode !== undefined) {
                     await Storage.setImmediate('colorMode', importData.colorMode);
@@ -1570,10 +1570,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 
                 // 更新UI
-                const gridCols = clampNumber(await Storage.get('gridCols', 5), 3, 10, 5);
-                const gridSize = clampNumber(await Storage.get('gridSize', 100), 80, 160, 100);
-                const scale = clampNumber(await Storage.get('scale', 100), 50, 200, 100);
-                const colorMode = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
+                const [rawGridCols, rawGridSize, rawScale, rawColorMode] = await Promise.all([
+                    Storage.get('gridCols', 5),
+                    Storage.get('gridSize', 100),
+                    Storage.get('scale', 100),
+                    Storage.get('colorMode', 'auto')
+                ]);
+                const gridCols = clampNumber(rawGridCols, 3, 10, 5);
+                const gridSize = clampNumber(rawGridSize, 80, 160, 100);
+                const scale = clampNumber(rawScale, 50, 200, 100);
+                const colorMode = sanitizeColorMode(rawColorMode);
                 
                 applyLayoutSettings(gridCols, gridSize, scale);
                 colInput.value = gridCols;
@@ -1624,13 +1630,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (e.key === 'Enter') performSearch();
     });
 
+    // 桌面环境自动聚焦搜索框（触屏设备不弹软键盘）
+    if (window.matchMedia('(pointer: fine)').matches) {
+        searchInput.focus();
+    }
+
     // --- 4. 快捷方式渲染 ---
     async function renderShortcuts() {
         shortcutsAbortController.abort();
         shortcutsAbortController = new AbortController();
         const signal = shortcutsAbortController.signal;
         shortcuts = sanitizeShortcuts(shortcuts, DEFAULT_SHORTCUTS);
+        // 数据即将重渲染，关闭可能残留的右键菜单，避免其索引指向过期数据
+        hideContextMenu();
 
+        // 与 background.js 的 CACHE_TTL 保持一致
         const FAVICON_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 
         const noIconShortcuts = shortcuts.filter(s => !s.icon);
@@ -1664,18 +1678,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         for (let index = 0; index < shortcuts.length; index++) {
             const item = shortcuts[index];
 
-            const div = document.createElement('div');
-            div.className = 'shortcut-item glass-element';
-            div.draggable = true;
-            div.dataset.index = index;
-            div.setAttribute('role', 'listitem');
-            div.setAttribute('tabindex', '0');
-            div.setAttribute('aria-label', `${item.name} - 快捷方式`);
+            // 使用 <a> 承载磁贴：获得浏览器原生导航（中键/Ctrl+点击新标签打开、Enter 激活）
+            const link = document.createElement('a');
+            link.className = 'shortcut-item glass-element';
+            link.href = item.url;
+            link.draggable = true;
+            link.dataset.index = index;
+            link.setAttribute('role', 'listitem');
+            link.setAttribute('aria-label', `${item.name} - 快捷方式`);
 
             const img = document.createElement('img');
             const span = document.createElement('span');
-            div.appendChild(img);
-            div.appendChild(span);
+            link.appendChild(img);
+            link.appendChild(span);
 
             if (item.icon) {
                 img.src = item.icon;
@@ -1705,21 +1720,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             span.textContent = item.name;
             span.title = item.name;
 
-            // 点击和键盘事件
-            const handleActivate = () => {
-                window.location.href = item.url;
-            };
-            div.addEventListener('click', handleActivate, { signal });
-            div.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleActivate();
-                }
-            }, { signal });
-            div.addEventListener('contextmenu', (e) => showContextMenu(e, index), { signal });
-            addDragEvents(div, signal);
+            // 图标加载/解码失败时统一回退为字母占位图（含缓存 dataUrl 损坏的情况）；
+            // 升级队列不再自行判断 naturalWidth，避免把仍在加载中的 _favicon 图片误判为失败
+            img.addEventListener('error', () => {
+                if (img.isConnected) applyFaviconFallback(img, item.url);
+            }, { once: true, signal });
 
-            fragment.appendChild(div);
+            link.addEventListener('contextmenu', (e) => showContextMenu(e, index), { signal });
+            addDragEvents(link, signal);
+
+            fragment.appendChild(link);
         }
 
         // 写入 DOM 前再次检查，避免旧渲染覆盖新渲染
@@ -1732,21 +1742,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function upgradeFavicon(imgElement, pageUrl, signal) {
         try {
-            const response = await chrome.runtime.sendMessage({
+            // 带超时保护，避免 Service Worker 无响应时升级队列的 worker 被永久占用
+            const response = await sendMessageWithTimeout({
                 action: 'getBestFavicon',
                 url: pageUrl
-            });
+            }, 15000, signal);
 
             if (signal && signal.aborted) return;
             if (response && response.dataUrl && imgElement.isConnected) {
                 imgElement.src = response.dataUrl;
-            } else if (imgElement.isConnected && imgElement.naturalWidth === 0) {
-                applyFaviconFallback(imgElement, pageUrl);
             }
-        } catch {
-            if (imgElement.isConnected && imgElement.naturalWidth === 0) {
-                applyFaviconFallback(imgElement, pageUrl);
-            }
+            // 失败时不在此处兜底：渲染时的 img.error 监听器统一负责字母占位
+        } catch (e) {
+            console.debug('[favicon] 升级图标失败:', pageUrl, e);
         }
     }
 
@@ -1984,9 +1992,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 简单的边界检测，防止菜单超出屏幕
         let top = e.clientY;
         let left = e.clientX;
-        // 考虑菜单本身的宽度和高度，避免菜单被截断
+        // 考虑菜单本身的宽度和高度，避免菜单被截断（两个菜单项的实际高度约 90px）
         const menuWidth = 120;
-        const menuHeight = 80;
+        const menuHeight = 90;
         if (left + menuWidth > window.innerWidth) left = window.innerWidth - menuWidth - 5;
         if (top + menuHeight > window.innerHeight) top = window.innerHeight - menuHeight - 5;
         contextMenu.style.top = `${top}px`;
@@ -2042,16 +2050,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     
     function deleteContextShortcut() {
-        if (contextMenuIndex > -1) { 
+        setContextMenuVisible(false);
+        // 边界校验：菜单打开期间快捷方式列表可能已变化（如其他页面导入数据），防止误删或越界
+        if (contextMenuIndex > -1 && contextMenuIndex < shortcuts.length) { 
             shortcuts.splice(contextMenuIndex, 1); 
             Storage.set('shortcuts', JSON.stringify(shortcuts));
             renderShortcuts(); 
-            setContextMenuVisible(false);
         } 
     }
 
     function editContextShortcut() {
-        if (contextMenuIndex > -1) {
+        setContextMenuVisible(false);
+        // 边界校验：同上，防止索引过期导致编辑错项或越界
+        if (contextMenuIndex > -1 && contextMenuIndex < shortcuts.length) {
             isEditing = true; 
             editIndex = contextMenuIndex;
             nameInput.value = shortcuts[editIndex].name; 
@@ -2076,7 +2087,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             editDialog.showModal();
             // 对话框显示后再更新预览，确保已有图标的快捷方式能可靠加载并渲染出图标
             updateIconPreview();
-            setContextMenuVisible(false);
         }
     }
 
@@ -2106,7 +2116,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         let currentTheme;
         if (mode === 'auto') {
             if (document.documentElement.classList.contains('has-custom-bg')) {
-                currentTheme = await detectBackgroundColor();
+                // 直接用存储中的壁纸值做亮度检测，避免再走 getComputedStyle 嗅探整段 data URL
+                let bgVal = null;
+                let bgModeNow = null;
+                try { bgModeNow = localStorage.getItem('_bgMode'); } catch(e) {}
+                if (bgModeNow === 'bing') {
+                    bgVal = sanitizeBackgroundValue(await Storage.get('bingBg'));
+                } else if (bgModeNow === 'custom') {
+                    bgVal = sanitizeBackgroundValue(await Storage.get('customBg'));
+                }
+                currentTheme = await detectBackgroundColor(bgVal);
             } else {
                 // 竞态保护：bgMode 为 bing/custom 但 has-custom-bg 类尚未添加时，
                 // 用上次权威检测结果而非系统偏好，避免覆盖正确的缓存主题
@@ -2133,39 +2152,40 @@ document.addEventListener('DOMContentLoaded', async () => {
             body.classList.add(targetClass);
         }
 
-        // 持久化实际主题，供下次首绘前立即应用
-        Storage.set('resolvedTheme', currentTheme);
+        // 持久化实际主题，供下次首绘前的 theme-init.js 同步读取
+        // （chrome.storage 中的 resolvedTheme 键从未被消费，不再写入）
         try { localStorage.setItem('_resolvedTheme', currentTheme); } catch(e) {}
         
         await updateTextColorClasses(currentTheme);
     }
     
     // 检测背景亮度并应用对应主题
-    async function detectBackgroundColor() {
+    // preferredBgUrl：调用方已持有的背景 data URL（可选）；缺省时回退为从计算样式嗅探
+    async function detectBackgroundColor(preferredBgUrl = null) {
         const body = document.body;
-        
-        // 获取预加载背景元素
-        const preloadBg = document.getElementById('preload-bg');
         let backgroundImage = '';
         
-        // 检查预加载背景是否有图片
-        if (preloadBg) {
-            const preloadStyle = window.getComputedStyle(preloadBg);
-            backgroundImage = preloadStyle.backgroundImage;
-        }
-        
-        // 如果预加载背景没有图片，检查body的背景图
-        if (!backgroundImage || backgroundImage === 'none' || !backgroundImage.includes('url')) {
-            const bodyStyle = window.getComputedStyle(body);
-            backgroundImage = bodyStyle.backgroundImage;
+        if (preferredBgUrl) {
+            backgroundImage = `url("${preferredBgUrl}")`;
+        } else {
+            // 获取预加载背景是否有图片
+            const preloadBgEl = document.getElementById('preload-bg');
+            if (preloadBgEl) {
+                const preloadStyle = window.getComputedStyle(preloadBgEl);
+                backgroundImage = preloadStyle.backgroundImage;
+            }
+            
+            // 如果预加载背景没有图片，检查body的背景图
+            if (!backgroundImage || backgroundImage === 'none' || !backgroundImage.includes('url')) {
+                const bodyStyle = window.getComputedStyle(body);
+                backgroundImage = bodyStyle.backgroundImage;
+            }
         }
         
         // 如果有自定义背景图
         const urlMatch = backgroundImage.match(/url\(["']?(.*?)["']?\)/);
         let theme = 'dark'; // 默认主题
-        let bgUrl = null;
         if (urlMatch && urlMatch[1] && urlMatch[1] !== 'none') {
-            bgUrl = urlMatch[1];
             return new Promise(resolve => {
                 const img = new Image();
                 img.crossOrigin = 'Anonymous';
@@ -2204,110 +2224,75 @@ document.addEventListener('DOMContentLoaded', async () => {
                         }
                     } catch (e) {
                         console.warn('无法分析背景图片亮度（可能受 CORS 限制），使用默认深色主题', e);
+                        theme = 'dark';
                         body.classList.remove('light-bg');
                         body.classList.add('dark-bg');
                     }
                     
-                    const themeInfo = {
-                        theme: theme,
-                        bgUrl: bgUrl,
-                        systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-                    };
-                    
-                    await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
-                    await Storage.set('resolvedTheme', theme);
-                    try { localStorage.setItem('_resolvedTheme', theme); } catch(e) {}
+                    persistResolvedTheme(theme);
                     await updateTextColorClasses(theme);
                     resolve(theme);
                 };
                 img.onerror = async function() {
                     console.warn('背景图片加载失败，使用默认深色主题');
+                    theme = 'dark';
                     body.classList.remove('light-bg');
                     body.classList.add('dark-bg');
-                    const themeInfo = {
-                        theme: 'dark',
-                        bgUrl: null,
-                        systemTheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-                    };
-                    await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
-                    await Storage.set('resolvedTheme', 'dark');
-                    try { localStorage.setItem('_resolvedTheme', 'dark'); } catch(e) {}
+                    persistResolvedTheme('dark');
                     await updateTextColorClasses('dark');
                     resolve('dark');
                 };
                 img.src = urlMatch[1];
             });
-        } else {
-            // 没有自定义背景图，根据系统主题或背景色亮度判断
-            const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
-            
-            if (prefersLight) {
-                theme = 'light';
-                body.classList.remove('dark-bg');
-                body.classList.add('light-bg');
-            } else {
-                // 默认深色
-                body.classList.remove('light-bg');
-                body.classList.add('dark-bg');
-            }
-            
-            const themeInfo = {
-                theme: theme,
-                bgUrl: null,
-                systemTheme: prefersLight ? 'light' : 'dark'
-            };
-            
-            await Storage.set('backgroundThemeInfo', JSON.stringify(themeInfo));
-            await Storage.set('resolvedTheme', theme);
-            try { localStorage.setItem('_resolvedTheme', theme); } catch(e) {}
-            await updateTextColorClasses(theme);
-            return theme;
         }
+        
+        // 没有自定义背景图，根据系统主题偏好判断
+        const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+        theme = prefersLight ? 'light' : 'dark';
+        
+        if (prefersLight) {
+            body.classList.remove('dark-bg');
+            body.classList.add('light-bg');
+        } else {
+            // 默认深色
+            body.classList.remove('light-bg');
+            body.classList.add('dark-bg');
+        }
+        
+        persistResolvedTheme(theme);
+        await updateTextColorClasses(theme);
+        return theme;
+    }
+
+    // 持久化权威主题结果到 localStorage（供下次首绘前的 theme-init.js 同步读取）
+    function persistResolvedTheme(theme) {
+        try { localStorage.setItem('_resolvedTheme', theme); } catch(e) {}
     }
     
     // 更新文本颜色类
-    async function updateTextColorClasses(mode) {
+    // theme: 'light' | 'dark'，由 applyColorMode / detectBackgroundColor 权威计算后传入
+    async function updateTextColorClasses(theme) {
         const searchCapsule = document.querySelector('.search-capsule');
         const shortcutsContainer = document.querySelector('.grid-container');
-        const addBtn = document.querySelector('.add-btn');
-        const settingsBtn = document.querySelector('.settings-btn');
-        const contextMenu = document.getElementById('context-menu');
+        const addBtnEl = document.querySelector('.add-btn');
+        const settingsBtnEl = document.querySelector('.settings-btn');
+        const contextMenuEl = document.getElementById('context-menu');
         
         // 移除现有的颜色类
-        [searchCapsule, shortcutsContainer, addBtn, settingsBtn].forEach(el => {
+        [searchCapsule, shortcutsContainer, addBtnEl, settingsBtnEl].forEach(el => {
             if (el) {
                 el.classList.remove('text-color-dark', 'text-color-light', 'icon-color-dark', 'icon-color-light', 'shortcut-color-dark', 'shortcut-color-light');
             }
         });
         
         // 移除右键菜单现有的颜色类
-        if (contextMenu) {
-            contextMenu.classList.remove('text-color-dark', 'text-color-light');
+        if (contextMenuEl) {
+            contextMenuEl.classList.remove('text-color-dark', 'text-color-light');
         }
         
-        // 根据模式或主题设置颜色类
-        let textColorClass, iconColorClass, shortcutColorClass;
-        
-        if (mode === 'auto') {
-            // 自动模式，从存储中获取主题
-            const themeInfo = await Storage.get('backgroundThemeInfo');
-            if (themeInfo) {
-                const parsedTheme = parseJsonSafe(themeInfo, { theme: 'dark' });
-                textColorClass = parsedTheme.theme === 'light' ? 'text-color-dark' : 'text-color-light';
-                iconColorClass = parsedTheme.theme === 'light' ? 'icon-color-dark' : 'icon-color-light';
-                shortcutColorClass = parsedTheme.theme === 'light' ? 'shortcut-color-dark' : 'shortcut-color-light';
-            } else {
-                // 默认为浅色文字（深色背景）
-                textColorClass = 'text-color-light';
-                iconColorClass = 'icon-color-light';
-                shortcutColorClass = 'shortcut-color-light';
-            }
-        } else {
-            // 固定模式
-            textColorClass = mode === 'light' ? 'text-color-dark' : 'text-color-light';
-            iconColorClass = mode === 'light' ? 'icon-color-dark' : 'icon-color-light';
-            shortcutColorClass = mode === 'light' ? 'shortcut-color-dark' : 'shortcut-color-light';
-        }
+        const textColorClass = theme === 'light' ? 'text-color-dark' : 'text-color-light';
+        const iconColorClass = theme === 'light' ? 'icon-color-dark' : 'icon-color-light';
+        const shortcutColorClass = theme === 'light' ? 'shortcut-color-dark' : 'shortcut-color-light';
         
         // 应用颜色类
         if (searchCapsule) {
@@ -2318,17 +2303,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             shortcutsContainer.classList.add(shortcutColorClass);
         }
         
-        if (addBtn) {
-            addBtn.classList.add(iconColorClass);
+        if (addBtnEl) {
+            addBtnEl.classList.add(iconColorClass);
         }
         
-        if (settingsBtn) {
-            settingsBtn.classList.add(iconColorClass);
+        if (settingsBtnEl) {
+            settingsBtnEl.classList.add(iconColorClass);
         }
         
         // 应用右键菜单颜色类
-        if (contextMenu) {
-            contextMenu.classList.add(textColorClass);
+        if (contextMenuEl) {
+            contextMenuEl.classList.add(textColorClass);
         }
     }
     
