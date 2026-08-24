@@ -32,6 +32,8 @@
 - [style.css](style.css) - 页面样式文件
 - [script.js](script.js) - 前端交互逻辑
 - [background.js](background.js) - 后台运行脚本
+- [liquid-glass.js](liquid-glass.js) - 液态玻璃物理折射滤镜引擎
+- [theme-init.js](theme-init.js) - 首绘前主题初始化（防闪烁）
 
 ## 外部服务说明
 
@@ -42,6 +44,13 @@
 ## 使用方法
 
 安装扩展后，每次打开新标签页时会自动显示自定义界面。
+
+## 致谢
+
+液态玻璃效果（[liquid-glass.js](liquid-glass.js)）的实现基于以下资料的思路与方法，特此致谢：
+
+- **[Liquid Glass in the Browser: Refraction with CSS and SVG — kube.io](https://kube.io/blog/liquid-glass-css-svg/)** —— 本项目玻璃折射效果的实现参考：表面轮廓函数（凸方圆/凸圆/凹面/凸缘）、基于 Snell–Descartes 定律的折射剖面预计算、归一化位移向量场生成 SVG 位移贴图（`maximumDisplacement` 直接用作 `feDisplacementMap` 的 `scale`），以及边缘镜面高光（rim light）的合成方式均源自该博文。
+- 效果灵感来自 Apple 在 WWDC 2025 引入的 **Liquid Glass** 设计语言。
 
 ## 许可证
 

@@ -1,8 +1,10 @@
 function showToast(message, type = 'error', duration = 3000) {
-    // dialog 通过 showModal() 打开时位于浏览器顶层（top layer），其 ::backdrop 会盖住
-    // 普通文档流中的任何元素（z-index 再高也没用）。因此当有 dialog 打开时，把气泡挂到
-    // 该 dialog 内部，使其随 dialog 一起进入顶层，避免被模糊遮罩遮挡。
-    const openDialog = document.querySelector('dialog[open]');
+    // 模态对话框（showModal）位于浏览器顶层（top layer），其 ::backdrop 会盖住
+    // 普通文档流中的任何元素（z-index 再高也没用），因此当有模态对话框打开时，
+    // 把气泡挂到该对话框内部使其进入顶层。
+    // 非模态对话框（show()，如液态玻璃调参面板）不在顶层：页面级 toast 可正常
+    // 覆盖其上——此时保持气泡显示在整个页面中下位置，而非对话框内部。
+    const openDialog = document.querySelector('dialog:modal');
     let container;
     if (openDialog) {
         container = openDialog.querySelector(':scope > .toast-container--dialog');
@@ -20,6 +22,11 @@ function showToast(message, type = 'error', duration = 3000) {
     toast.className = `toast toast-${type}`;
     toast.textContent = message;
     container.appendChild(toast);
+
+    // Toast 使用与对话框统一的高模糊玻璃材质（模糊度固定，不随用户参数调整）
+    if (window.LiquidGlass) {
+        try { window.LiquidGlass.applyTo(toast); } catch {}
+    }
 
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -661,6 +668,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.documentElement.style.setProperty('--item-size', `${scaledItemSize}px`);
         document.documentElement.style.setProperty('--search-width', `${scaledSearchWidth}px`);
         document.documentElement.style.setProperty('--scale', scaleValue);
+        // 元素尺寸可能变化：刷新物理折射滤镜（尺寸未变的分组命中缓存，代价极低）
+        if (window.LiquidGlass) {
+            try { window.LiquidGlass.refresh(); } catch {}
+        }
     }
 
     const [rawCols, rawSize, rawScale] = await Promise.all([
@@ -999,8 +1010,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 监听系统主题变化
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     mediaQuery.addEventListener('change', async (e) => {
-        // 对话框始终跟随浏览器主题
-        applyDialogSystemTheme();
+        // 对话框极性跟随页面解析主题（见 syncDialogTheme）
+        syncDialogTheme();
 
         const currentColorMode = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
         // 仅自动模式且无自定义背景时跟随系统主题变化；
@@ -1019,8 +1030,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-    // 对话框独立跟随浏览器系统主题
-    applyDialogSystemTheme();
+    // 对话框极性与页面解析主题对齐（body 类尚未就绪时回退 _resolvedTheme 缓存）
+    syncDialogTheme();
 
     // --- 壁纸设置初始化 ---
     await loadBgSettings();
@@ -1032,6 +1043,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- 2. 设置面板逻辑 ---
     settingsBtn.addEventListener('click', () => {
         settingsDialog.showModal();
+        // 打开时元素刚从 display:none 变为可见，立即挂接玻璃滤镜
+        if (window.LiquidGlass) { try { window.LiquidGlass.refresh(); } catch {} }
     });
     
     settingsClose.addEventListener('click', () => settingsDialog.close());
@@ -1144,6 +1157,123 @@ document.addEventListener('DOMContentLoaded', async () => {
             nextButton.click();
         });
     });
+
+    // --- 液态玻璃参数设置（外观入口 + 右侧实时调参面板） ---
+    const GLASS_STORAGE_KEY = 'liquidGlassParams';
+    const glassControlsHost = document.getElementById('glass-controls');
+    const glassResetBtn = document.getElementById('glass-reset-btn');
+    const glassTuneBtn = document.getElementById('glass-tune-btn');
+    const glassDialogEl = document.getElementById('glass-dialog');
+    const glassCloseBtn = document.getElementById('glass-close-btn');
+
+    if (window.LiquidGlass && glassControlsHost && glassResetBtn &&
+        glassTuneBtn && glassDialogEl && glassCloseBtn) {
+        // 滑杆定义：[参数键, 显示名, min, max, step]
+        const glassSliderDefs = [
+            ['thickness', '玻璃厚度', 8, 80, 1],
+            ['bezel', '斜面宽度', 3, 24, 1],
+            ['ior', '折射率', 1, 2.5, 0.05],
+            ['refractionLevel', '折射强度', 0, 1.5, 0.05],
+            ['blurIn', '边缘柔化', 0, 3, 0.1],
+            ['saturate', '色彩饱和', 1, 3, 0.1],
+            ['specOpacity', '高光强度', 0, 1, 0.02],
+            ['backdropBlur', '背景模糊', 0, 6, 0.2],
+        ];
+        let glassState = null;
+        const glassValueEls = {};
+
+        const formatGlassValue = (value, step) => {
+            const decimals = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
+            return Number(value).toFixed(decimals);
+        };
+
+        const applyAndPersistGlass = () => {
+            Storage.set(GLASS_STORAGE_KEY, glassState);
+            window.LiquidGlass.applySettings(glassState);
+        };
+
+        // 动态构建滑杆行（复用布局设置的 setting-group/setting-slider 样式）
+        for (const [key, label, min, max, step] of glassSliderDefs) {
+            const group = document.createElement('div');
+            group.className = 'setting-group';
+
+            const labelEl = document.createElement('label');
+            labelEl.className = 'setting-label';
+            labelEl.htmlFor = `glass-${key}`;
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'setting-name';
+            nameSpan.textContent = label;
+
+            const valueSpan = document.createElement('span');
+            valueSpan.className = 'setting-value';
+            nameSpan.appendChild(valueSpan);
+
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.className = 'setting-slider';
+            input.id = `glass-${key}`;
+            input.min = String(min);
+            input.max = String(max);
+            input.step = String(step);
+            input.setAttribute('aria-label', label);
+
+            labelEl.appendChild(nameSpan);
+            group.appendChild(labelEl);
+            group.appendChild(input);
+
+            input.addEventListener('input', () => {
+                if (!glassState) return;
+                glassState[key] = Number(input.value);
+                valueSpan.textContent = formatGlassValue(input.value, step);
+                applyAndPersistGlass();
+            });
+
+            glassValueEls[key] = { input, valueSpan };
+            glassControlsHost.appendChild(group);
+        }
+
+        const syncGlassUI = () => {
+            for (const [key, , , , step] of glassSliderDefs) {
+                const { input, valueSpan } = glassValueEls[key];
+                input.value = String(glassState[key]);
+                valueSpan.textContent = formatGlassValue(glassState[key], step);
+            }
+        };
+
+        // 等持久化参数加载完成后再初始化 UI 状态，避免默认值闪现覆盖已存值
+        window.LiquidGlass.ready.then(() => {
+            glassState = window.LiquidGlass.getSettings();
+            syncGlassUI();
+
+            glassResetBtn.addEventListener('click', () => {
+                glassState = window.LiquidGlass.getDefaults();
+                applyAndPersistGlass();
+                syncGlassUI();
+                showToast('已恢复默认玻璃参数', 'success');
+            });
+
+            // 打开右侧调参面板：须先关闭设置对话框——模态对话框打开期间文档
+            // 其余部分处于 inert 状态，非模态面板将无法交互；关闭后即可
+            // 不遮挡、不模糊页面地实时预览调整效果
+            glassTuneBtn.addEventListener('click', () => {
+                settingsDialog.close();
+                try { glassDialogEl.show(); } catch {}
+                if (window.LiquidGlass) { try { window.LiquidGlass.refresh(); } catch {} }
+            });
+
+            glassCloseBtn.addEventListener('click', () => glassDialogEl.close());
+
+            // 非模态对话框不自带 Esc 关闭行为，手动补齐
+            glassDialogEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    glassDialogEl.close();
+                }
+            });
+        }).catch((e) => console.debug('[liquid-glass] 设置初始化失败:', e));
+    }
 
     // 保存快捷方式
     async function handleSaveShortcut(e) {
@@ -1738,6 +1868,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         grid.appendChild(fragment);
 
         processUpgradeQueue(upgradeQueue, signal);
+        // 新磁贴需要挂接动态折射滤镜（同尺寸分组命中缓存）
+        if (window.LiquidGlass) {
+            try { window.LiquidGlass.refresh(); } catch {}
+        }
     }
 
     async function upgradeFavicon(imgElement, pageUrl, signal) {
@@ -1821,14 +1955,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     function addDragEvents(item, signal) {
-        item.addEventListener('dragstart', (e) => {
-            currentDragElement = item;
-            item.classList.add('dragging');
-            item.style.opacity = '0.5';
-            
-            e.dataTransfer.setData('text/plain', item.dataset.index);
-            e.dataTransfer.effectAllowed = 'move';
-        }, { signal });
+    item.addEventListener('dragstart', (e) => {
+        currentDragElement = item;
+        item.classList.add('dragging');
+        item.style.opacity = '0.5';
+
+        e.dataTransfer.setData('text/plain', item.dataset.index);
+        e.dataTransfer.effectAllowed = 'move';
+
+        // Chromium 原生拖拽快照对含 backdrop-filter 的圆角元素会在四角漏出
+        // 未裁剪的白底，且折射效果会被拍扁；改用静态「玻璃质感」克隆作为拖拽幻影。
+        // 关键：幻影必须存活到 dragend——过早移除（如 setTimeout 0）会使浏览器
+        // 回退到有缺陷的原生快照。拖拽位图是静态的，无法保留实时折射，
+        // 故以对角渐变高光 + 内阴影近似玻璃观感
+        try {
+            const ghost = item.cloneNode(true);
+            const radius = getComputedStyle(item).borderTopLeftRadius || '16px';
+            ghost.style.cssText =
+                'position:fixed;left:-9999px;top:-9999px;' +
+                'width:' + item.offsetWidth + 'px;height:' + item.offsetHeight + 'px;' +
+                'margin:0;border-radius:' + radius + ';' +
+                'background:linear-gradient(135deg,rgba(255,255,255,0.32),rgba(255,255,255,0.07) 42%,rgba(255,255,255,0.16));' +
+                'box-shadow:inset 0 1px 1px rgba(255,255,255,0.28),0 10px 28px rgba(0,0,0,0.35);' +
+                '-webkit-backdrop-filter:none;backdrop-filter:none;' +
+                'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
+                'pointer-events:none;';
+            ghost.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(ghost);
+            e.dataTransfer.setDragImage(ghost, Math.round(item.offsetWidth / 2), Math.round(item.offsetHeight / 2));
+            const removeGhost = () => ghost.remove();
+            window.addEventListener('dragend', removeGhost, { once: true });
+            setTimeout(removeGhost, 15000); // 拖拽被系统取消等异常路径的兜底清理
+        } catch {}
+    }, { signal });
         
         item.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -1910,7 +2069,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         iconInput.value = ''; // 清空图标输入框
         iconPreviewFallback = null; // 新建快捷方式无站点 favicon 回退
         updateIconPreview();
-        editDialog.showModal(); 
+        editDialog.showModal();
+        if (window.LiquidGlass) { try { window.LiquidGlass.refresh(); } catch {} }
     });
 
     // 图标上传处理
@@ -2087,6 +2247,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             editDialog.showModal();
             // 对话框显示后再更新预览，确保已有图标的快捷方式能可靠加载并渲染出图标
             updateIconPreview();
+            if (window.LiquidGlass) { try { window.LiquidGlass.refresh(); } catch {} }
         }
     }
 
@@ -2272,6 +2433,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 更新文本颜色类
     // theme: 'light' | 'dark'，由 applyColorMode / detectBackgroundColor 权威计算后传入
     async function updateTextColorClasses(theme) {
+        // 主题解析落定后同步对话框极性（所有主题解析路径都会经过此处，
+        // 保证纯黑/纯白壁纸上对话框 scrim 与文字极性一致）
+        syncDialogTheme();
         const searchCapsule = document.querySelector('.search-capsule');
         const shortcutsContainer = document.querySelector('.grid-container');
         const addBtnEl = document.querySelector('.add-btn');
@@ -2319,14 +2483,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     
 
     
-    // 更新对话框颜色模式：始终跟随浏览器系统主题，与玻璃组件的颜色模式独立
-    function applyDialogSystemTheme() {
+    // 对齐对话框极性与页面解析主题（由背景亮度检测/用户手动选择驱动），
+    // 而非系统偏好——纯黑/纯白壁纸上必须保证面板底色与文字极性一致才可读。
+    // 极性判定优先级：body 类 > _resolvedTheme 缓存（body 类尚未就绪的
+    // 初始化窗口期使用，避免与权威缓存冲突）> 系统偏好兜底
+    function syncDialogTheme() {
         const dialogs = document.querySelectorAll('.glass-dialog');
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        
+        let dark;
+        if (document.body.classList.contains('light-bg')) {
+            dark = false;
+        } else if (document.body.classList.contains('dark-bg')) {
+            dark = true;
+        } else {
+            let cached = null;
+            try { cached = localStorage.getItem('_resolvedTheme'); } catch(e) {}
+            if (cached === 'light' || cached === 'dark') {
+                dark = cached === 'dark';
+            } else {
+                dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            }
+        }
         dialogs.forEach(dialog => {
             dialog.classList.remove('light-bg', 'dark-mode');
-            dialog.classList.add(prefersDark ? 'dark-mode' : 'light-bg');
+            dialog.classList.add(dark ? 'dark-mode' : 'light-bg');
         });
     }
     

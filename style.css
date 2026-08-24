@@ -13,24 +13,25 @@
   --search-width: 580px;
   --bg-image: none;
   --scale: 1;
-  /* 液態玻璃：輕模糊 + SVG 位移濾鏡，背景柔和透出並自然晃動 */
-  --liquid-blur: 3px;
-  /* 半透明填充（文章 rgba(255,255,255,0.1)） */
-  --liquid-fill: rgba(255, 255, 255, 0.1);
-  --liquid-fill-hover: rgba(255, 255, 255, 0.16);
+  /* 液態玻璃：輕模糊基座 + 動態物理折射濾鏡（liquid-glass.js），背景柔和透出 */
+  --liquid-blur: 1.5px;
+  /* 玻璃表面不再叠加任何静态白色底：纯白/浅色背景下它会显形为一条亮线。
+     材质感完全由动态折射 + 高光滤镜承担（白底上白色高光自然隐没，符合物理直觉）。
+     hover 仅保留极弱反馈；strong 供 toast 等功能浮层保证可读性 */
+  --liquid-fill: transparent;
+  --liquid-fill-hover: rgba(255, 255, 255, 0.06);
   --liquid-fill-strong: rgba(255, 255, 255, 0.16);
   /* 文章明確不用 border：邊緣厚度完全由多層 inset 陰影表達 */
   --liquid-stroke: transparent;
   --liquid-highlight: rgba(255, 255, 255, 0.86);
   /* 柔和邊緣反光：低透明度 + 1px 模糊的柔光，避免生硬白線形成框感 */
   --liquid-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
-  --liquid-inner-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.16),
-    inset 0 -1px 1px rgba(255, 255, 255, 0.04),
-    inset 3px 3px 12px rgba(255, 255, 255, 0.03);
-  /* backdrop-filter 統一值（含 SVG 位移濾鏡）與 Safari 回退值 */
-  --liquid-backdrop: blur(var(--liquid-blur)) url(#liquid_glass_filter);
-  --liquid-backdrop-fallback: blur(var(--liquid-blur));
+  /* 内阴影（顶层为 1px 白线）是浅色背景上“亮线”的直接来源，随白底一并移除；
+     用全零透明影子占位，避免 box-shadow 列表中混入 none 导致整条声明失效 */
+  --liquid-inner-shadow: 0 0 0 0 transparent;
+  /* 基础玻璃模糊。物理折射滤镜(#lg-f-*)由 liquid-glass.js 按元素尺寸动态生成，
+     就绪后对关键表面以内联 backdrop-filter 叠加 url(#) 引用；未升级的表面保持纯模糊回退 */
+  --liquid-backdrop: blur(var(--liquid-blur));
 
   /* Animation Tokens */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -334,7 +335,7 @@ body {
   background: var(--liquid-fill);
   border: 1px solid var(--liquid-stroke);
   box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
-  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
   backdrop-filter: var(--liquid-backdrop);
   /* box-shadow 不参与过渡：其重绘在主线程执行，与合成器上的 transform 动画不同步，
      导致取消悬浮时阴影“慢半拍”；悬浮阴影改由 .icon-hover::after 的 opacity 过渡实现 */
@@ -346,7 +347,7 @@ body {
   outline: 0;
 }
 
-/* 玻璃質感完全由 backdrop-filter（blur + SVG 位移濾鏡）呈現。
+/* 玻璃質感由 backdrop-filter（基础模糊 + liquid-glass.js 注入的动态折射滤镜）呈現。
    不再使用 ::before 繪製背景模糊副本：該層會與 backdrop-filter 疊加形成雙重模糊，
    且其 z-index 會覆蓋在文字之上導致字體被遮擋，亦使設置內按鈕殘留玻璃感，故移除。 */
 
@@ -360,7 +361,7 @@ body {
   /* 确保 ::after 阴影层相对自身定位（部分 .icon-hover 元素无 position 声明） */
   position: relative;
   /* 常驻独立合成层：防止取消悬浮后 transform 归零时合成层被降级（de-promote），
-     避免 backdrop-filter（SVG 位移滤镜）重光栅化瞬间在元素外侧闪现一帧边框 */
+     避免 backdrop-filter（动态折射滤镜）重光栅化瞬间在元素外侧闪现一帧边框 */
   will-change: transform;
 }
 
@@ -521,17 +522,22 @@ input:focus-visible,
   background: var(--liquid-fill);
   border: 1px solid var(--liquid-stroke);
   box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
-  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
   backdrop-filter: var(--liquid-backdrop);
-  /* box-shadow 不参与过渡（同 .glass-element）：悬浮阴影由 ::after 的 opacity 接管 */
+  /* 过渡方向刻意不对称：
+     - 抬升(:hover 内声明)用 0.25s ease-out，起步轻柔、落定舒缓，显得轻盈；
+     - 回落(本条基础规则)用 0.18s 平滑 S 曲线：两端速度都趋近零——
+       起步不猛（无弹回感）、落点缓收（无生硬急停），
+       且时长短于抬升，不会出现原 0.25s ease-out 的长尾漂移；
+       颜色与位移同曲线同时长，确保所有属性同步柔和落定 */
   transition:
-    transform var(--duration-normal) var(--ease-out-cubic),
-    background var(--duration-normal) var(--ease-out-cubic),
-    border-color var(--duration-normal) var(--ease-out-cubic);
+    transform 0.18s cubic-bezier(0.45, 0, 0.2, 1),
+    background 0.18s cubic-bezier(0.45, 0, 0.2, 1),
+    border-color 0.18s cubic-bezier(0.45, 0, 0.2, 1);
   /* 保持独立合成层，避免悬浮结束时位移回到原位出现跳变 */
   will-change: transform;
   /* 覆盖共享玻璃规则的 overflow:hidden——该属性在合成器中产生独立裁剪层，
-     当右键菜单等外部元素触发页面重合成时，裁剪层与 backdrop-filter（SVG 位移滤镜）
+     当右键菜单等外部元素触发页面重合成时，裁剪层与 backdrop-filter（动态折射滤镜）
      的光栅化输出可能错位，在最右列图标右缘泄漏出纵向亮条（"分层"）。
      移除后由 border-radius 在现代 Chromium 中原生裁剪 backdrop-filter 圆角，
      同时保留 box-shadow 外阴影不被裁剪（clip-path 会连阴影一起裁掉） */
@@ -543,6 +549,13 @@ input:focus-visible,
   transform: translateY(-2px);
   background: var(--liquid-fill-hover);
   border-color: var(--liquid-stroke);
+  /* 抬升采用 easeOutBack 弹簧曲线（y>1 产生轻微过冲再回落）：
+     磁贴先越过 -2px 目标位约 10% 再弹回，比纯 ease-out 更有“活体感”；
+     颜色仍走平滑 ease-out，避免色彩跟着抖动 */
+  transition:
+    transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background var(--duration-normal) var(--ease-out-cubic),
+    border-color var(--duration-normal) var(--ease-out-cubic);
 }
 
 .shortcut-item img {
@@ -550,7 +563,8 @@ input:focus-visible,
   height: 42%;
   margin-bottom: var(--space-3);
   filter: drop-shadow(0 4px 4px rgba(0, 0, 0, 0.2));
-  transition: transform var(--duration-normal) var(--ease-out-cubic);
+  /* 图标缩放与磁贴回落同步：同曲线同时长，柔和归位 */
+  transition: transform 0.18s cubic-bezier(0.45, 0, 0.2, 1);
   pointer-events: none;
   object-fit: contain;
   object-position: center;
@@ -558,6 +572,8 @@ input:focus-visible,
 
 .shortcut-item:hover img {
   transform: scale(1.08);
+  /* 图标与磁贴共用弹簧曲线，过冲方向一致（放大略超 1.08 后落定） */
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .shortcut-item span {
@@ -644,7 +660,7 @@ input:focus-visible,
   box-shadow: 0 22px 58px rgba(0, 0, 0, 0.14), var(--liquid-inner-shadow);
   min-width: 340px;
   position: relative;
-  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
   backdrop-filter: var(--liquid-backdrop);
   outline: 0;
   overflow: hidden;
@@ -666,7 +682,7 @@ input:focus-visible,
   background: var(--liquid-fill);
   border: 1px solid var(--liquid-stroke);
   box-shadow: var(--liquid-inner-shadow);
-  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
   backdrop-filter: var(--liquid-backdrop);
   width: 100%;
   box-sizing: border-box;
@@ -731,7 +747,7 @@ input:focus-visible,
     border-color var(--duration-fast) var(--ease-out-cubic),
     background var(--duration-fast) var(--ease-out-cubic);
   box-shadow: var(--liquid-inner-shadow);
-  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
   backdrop-filter: var(--liquid-backdrop);
 }
 
@@ -909,7 +925,9 @@ input:focus-visible,
   cursor: pointer;
   font-family: var(--font-family-base);
   font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
+  /* 控件标签统一 medium：与 seg-btn/标签层级一致，避免同层选项粗细混排；
+     强调型主按钮（primary）单独回到 semibold */
+  font-weight: var(--font-weight-medium);
   transition: all var(--duration-fast) var(--ease-out-cubic);
   display: inline-flex;
   align-items: center;
@@ -917,7 +935,7 @@ input:focus-visible,
   gap: var(--space-2);
   position: relative;
   box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
-  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
   backdrop-filter: var(--liquid-backdrop);
   outline: 0;
   min-height: 44px;
@@ -931,6 +949,7 @@ input:focus-visible,
 .glass-btn.primary {
   background: var(--liquid-fill-hover);
   border-color: transparent;
+  font-weight: var(--font-weight-semibold);
 }
 
 .glass-btn.primary:hover {
@@ -992,16 +1011,15 @@ input:focus-visible,
 }
 
 /* ------------------------------------------
-   纯色 · 简约现代风格弹窗（不使用液态玻璃）
-   #settings-dialog 与 #edit-dialog 共享同一套纯色样式
+   纯色 · 简约现代风格弹窗 → 统一玻璃材质
+   #settings-dialog 与 #edit-dialog 共享同一套样式：
+   半透明 scrim + liquid-glass.js 注入的固定强模糊折射滤镜（无白底）
    ------------------------------------------ */
 #settings-dialog,
 #edit-dialog {
-  background: #1d1d24;
+  background: rgba(20, 23, 31, 0.66);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   color: #ececf1;
 }
 
@@ -1165,10 +1183,10 @@ input:focus-visible,
   color: #fff;
 }
 
-/* 纯色弹窗 · 浅色模式（共享） */
+/* 纯色弹窗 · 浅色模式（共享）：半透明浅色 scrim，极性由页面解析主题驱动 */
 #settings-dialog.light-bg,
 #edit-dialog.light-bg {
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.7);
   border-color: rgba(0, 0, 0, 0.08);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.22);
   color: #1a1a2e;
@@ -1390,6 +1408,37 @@ input:focus-visible,
   color: #1a1a2e;
 }
 
+/* ------------------------------------------
+   玻璃对话框内补回细边框：
+   容器此前仅靠半透明填充区分轮廓（描边令牌为透明），
+   对话框改为透出背景的玻璃材质后需要显式边框维持层次。
+   仅覆盖 border-color，保留原宽度/样式与激活态强调色
+   ------------------------------------------ */
+#settings-dialog .settings-tabs,
+#settings-dialog .bg-quality-segmented,
+#settings-dialog .bg-subpanel,
+#settings-dialog .wall-preview,
+#settings-dialog .wall-refresh {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* 排除激活态：激活卡片使用强调色描边，优先级需让位于下方浅色规则之外的原规则 */
+#settings-dialog .bg-mode-segmented .seg-btn:not(.active) {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+#settings-dialog.light-bg .settings-tabs,
+#settings-dialog.light-bg .bg-quality-segmented,
+#settings-dialog.light-bg .bg-subpanel,
+#settings-dialog.light-bg .wall-preview,
+#settings-dialog.light-bg .wall-refresh {
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+#settings-dialog.light-bg .bg-mode-segmented .seg-btn:not(.active) {
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
 .settings-content {
   display: grid;
   grid-template-columns: 1fr;
@@ -1446,12 +1495,18 @@ input:focus-visible,
 }
 
 .settings-section h4 {
-  margin: 0 0 var(--space-4) 0;
+  /* 段前距用于分隔相邻分组（如颜色模式 → 液态玻璃 → 背景），
+     首个标题贴齐面板顶部不留空档 */
+  margin: var(--space-6) 0 var(--space-4) 0;
   opacity: 0.7;
   font-weight: var(--font-weight-normal);
   font-size: var(--font-size-xs);
   letter-spacing: 0;
   color: var(--color-text-secondary);
+}
+
+.settings-section h4:first-of-type {
+  margin-top: 0;
 }
 
 .setting-group {
@@ -1468,6 +1523,7 @@ input:focus-visible,
   font-weight: var(--font-weight-normal);
   font-size: var(--font-size-base);
   white-space: nowrap;
+  line-height: 1.45;
   opacity: 0.9;
   color: var(--color-text-secondary);
 }
@@ -1492,6 +1548,165 @@ input:focus-visible,
   display: flex;
   gap: var(--space-3);
   margin-top: var(--space-3);
+}
+
+/* 液态玻璃：外观页入口提示文案 */
+.glass-hint {
+  margin: var(--space-2) 0 0 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  color: inherit;
+  opacity: 0.65;
+}
+
+/* ------------------------------------------
+   液态玻璃调参面板（非模态右侧栏）
+   show() 打开：无 ::backdrop 遮罩，不模糊/不遮挡页面，可实时预览
+   ------------------------------------------ */
+#glass-dialog {
+  position: fixed;
+  top: 50%;
+  right: var(--space-6);
+  /* UA 默认 dialog 含 left:0/right:0/margin:auto 的居中规则；
+     不显式重置 left 会让 right 失效，面板贴到页面左侧 */
+  left: auto;
+  transform: translateY(-50%);
+  margin: 0;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  /* 半透明底：面板自身的玻璃质感由 liquid-glass.js 注入的强模糊折射滤镜
+     （blurIn 5 / backdropBlur 18，固定值、不随用户设置联动）提供 */
+  background: rgba(24, 26, 34, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  color: #ececf1;
+  /* 高于磁贴悬浮(z:10)/设置按钮(z:100)，低于右键菜单(z:1000)与 toast */
+  z-index: 500;
+}
+
+/* 面板内参数行：显式命名与数值配色（不依赖页面级 token） */
+#glass-dialog .setting-group {
+  margin-bottom: var(--space-4);
+}
+
+#glass-dialog .setting-label {
+  gap: var(--space-1);
+}
+
+#glass-dialog .setting-label .setting-name {
+  color: rgba(236, 236, 241, 0.8);
+  opacity: 1;
+}
+
+#glass-dialog .setting-label .setting-value {
+  color: #fff;
+}
+
+#glass-dialog .dialog-title {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  text-align: left;
+  padding: 0 0 var(--space-4) 0;
+  margin: 0 0 var(--space-5) 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: #ececf1;
+}
+
+#glass-dialog .glass-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  color: #ececf1;
+}
+
+#glass-dialog .glass-btn:hover {
+  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+#glass-dialog .glass-btn.primary {
+  background: #4a8cff;
+  border-color: #4a8cff;
+  color: #fff;
+}
+
+#glass-dialog .glass-btn.primary:hover {
+  background: #3b7df2;
+  border-color: #3b7df2;
+}
+
+#glass-dialog input[type="range"] {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+#glass-dialog input[type="range"]::-webkit-slider-thumb {
+  background: #4a8cff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+#glass-actions-row {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  margin-top: var(--space-5);
+}
+
+/* 浅色模式（跟随页面解析主题，由 syncDialogTheme 切换 light-bg 类） */
+#glass-dialog.light-bg {
+  background: rgba(255, 255, 255, 0.66);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.22);
+  color: #1a1a2e;
+}
+
+#glass-dialog.light-bg .dialog-title {
+  color: #1a1a2e;
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+#glass-dialog.light-bg .glass-btn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #1a1a2e;
+}
+
+#glass-dialog.light-bg .glass-btn.primary {
+  background: #2f6fe4;
+  border-color: #2f6fe4;
+  color: #fff;
+}
+
+#glass-dialog.light-bg .setting-label .setting-name {
+  color: rgba(26, 26, 46, 0.75);
+}
+
+#glass-dialog.light-bg .setting-label .setting-value {
+  color: #1a1a2e;
+}
+
+#glass-dialog.light-bg input[type="range"] {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+#glass-dialog.light-bg input[type="range"]::-webkit-slider-thumb {
+  background: #2f6fe4;
+}
+
+@media (max-width: 640px) {
+  #glass-dialog {
+    right: 12px;
+    width: min(320px, calc(100vw - 24px));
+  }
 }
 
 .color-mode-buttons .glass-btn {
@@ -1734,7 +1949,7 @@ input:focus-visible,
   color: var(--color-text-primary);
   cursor: pointer;
   box-shadow: var(--liquid-shadow);
-  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  -webkit-backdrop-filter: var(--liquid-backdrop);
   backdrop-filter: var(--liquid-backdrop);
   transition: background var(--duration-fast) var(--ease-out-cubic),
               transform var(--duration-fast) var(--ease-out-cubic);
@@ -1942,11 +2157,12 @@ input[type="range"]::-moz-range-thumb {
     opacity var(--duration-fast) var(--ease-out-cubic),
     transform var(--duration-fast) var(--ease-out-cubic),
     visibility var(--duration-fast);
-  background: var(--liquid-fill);
+  /* 菜单需自备半透明白底（玻璃表面已去静态白底），保证任意背景下可读 */
+  background: rgba(255, 255, 255, 0.14);
   border: 1px solid var(--liquid-stroke);
   box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
-  /* 菜单只用纯模糊、不引用共享的 SVG 位移滤镜：菜单项悬浮会触发重绘，
-     若共享 #liquid_glass_filter，重栅格化会波及远处磁贴的 backdrop-filter，
+  /* 菜单只用纯模糊、不参与动态折射滤镜：菜单项悬浮会触发重绘，
+     若共用折射滤镜，重栅格化会波及远处磁贴的 backdrop-filter，
      使最右列磁贴右侧出现亮度异常；
      模糊略高于普通玻璃组件，强化菜单“浮起”的层次感 */
   -webkit-backdrop-filter: blur(calc(var(--liquid-blur) + 3px));
@@ -2033,13 +2249,16 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .toast {
-  background: var(--liquid-fill-strong);
+  /* 深色 scrim：玻璃材质（强模糊折射滤镜）由 script.js 创建时经
+     LiquidGlass.applyTo 注入；文字颜色随页面解析主题自动切换极性 */
+  background: rgba(20, 22, 30, 0.55);
   border-radius: var(--radius-lg);
   padding: var(--space-3) var(--space-6);
   color: var(--color-text-primary);
   font-size: var(--font-size-base);
   font-family: var(--font-family-base);
-  -webkit-backdrop-filter: var(--liquid-backdrop-fallback);
+  line-height: 1.5;
+  -webkit-backdrop-filter: var(--liquid-backdrop);
   backdrop-filter: var(--liquid-backdrop);
   box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
   opacity: 0;
@@ -2087,9 +2306,8 @@ input[type="range"]::-moz-range-thumb {
 }
 
 body.light-bg .toast {
-  background: var(--liquid-fill-strong);
-  color: var(--color-text-primary);
-  box-shadow: var(--liquid-shadow), var(--liquid-inner-shadow);
+  /* 页面解析为浅色主题（如纯白背景）时切换浅色 scrim，保证深色文字可读 */
+  background: rgba(255, 255, 255, 0.62);
 }
 
 /* ------------------------------------------

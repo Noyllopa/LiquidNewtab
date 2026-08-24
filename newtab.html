@@ -29,40 +29,6 @@
         <div class="blob blob-3"></div>
     </div>
     
-    <!-- SVG 滤镜定义：iOS26 液態玻璃（Liquid Glass）核心 -->
-    <svg style="position: absolute; width: 0; height: 0; left: -9999px; top: -9999px;" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <defs>
-            <filter id="frosted" x="-20%" y="-20%" width="140%" height="140%">
-                <feGaussianBlur in="SourceGraphic" stdDeviation="10" />
-            </filter>
-            <!-- 液態玻璃濾鏡：碎形雜訊 → 平滑 → 位移扭曲。
-                 核心防漏光設計：feMorphology+feGaussianBlur 生成「邊緣衰減遮罩」，
-                 經 feComponentTransfer 居中後與位移圖相乘，使位移在玻璃邊緣平滑歸零——
-                 玻璃內的折射背景與玻璃外未濾鏡背景在邊界處無縫銜接，
-                 重合成（如右鍵菜單彈出）或裁剪方式變化時不再泄漏亮條/分層。
-                 濾鏡區域嚴格等於元素邊界（0%/100%），edgeMode="duplicate" 防止噪聲邊緣衰減偏置。
-                 防斑點優化：提高位移圖模糊半徑消除高頻雜訊、降低位移縮放避免深色背景拉入亮像素、
-                 修正 feComposite k2=0 確保邊緣位移嚴格歸零、位移後追加輕模糊平滑折射紋理 -->
-            <filter id="liquid_glass_filter" x="0%" y="0%" width="100%" height="100%">
-                <feTurbulence type="fractalNoise" baseFrequency="0.0025" numOctaves="2" seed="7" result="noise"/>
-                <feGaussianBlur in="noise" stdDeviation="3.2" result="map" edgeMode="duplicate"/>
-                <!-- 邊緣衰減遮罩：腐蝕 4px 再模糊 5px，邊界處 alpha 平滑降至 0 -->
-                <feMorphology in="SourceAlpha" operator="erode" radius="4" result="eroded"/>
-                <feGaussianBlur in="eroded" stdDeviation="5" result="fadeMask"/>
-                <!-- 位移圖居中（中性值 0.5→0）並乘以衰減遮罩：邊緣位移嚴格歸零（k2=0），內部保持全強度折射 -->
-                <feComponentTransfer in="map" result="mapCentered">
-                    <feFuncR type="linear" slope="1" intercept="-0.5"/>
-                    <feFuncG type="linear" slope="1" intercept="-0.5"/>
-                </feComponentTransfer>
-                <feComposite in="mapCentered" in2="fadeMask" operator="arithmetic" k1="1" k2="0" k3="0" k4="0" result="mapFaded"/>
-                <feDisplacementMap in="SourceGraphic" in2="mapFaded" scale="16" xChannelSelector="R" yChannelSelector="G" result="displaced"/>
-                <!-- 位移後輕模糊：消除深色背景上因像素取樣產生的細碎斑點 -->
-                <feGaussianBlur in="displaced" stdDeviation="0.4" result="smoothed"/>
-                <feComposite in="smoothed" in2="SourceAlpha" operator="in"/>
-            </filter>
-        </defs>
-    </svg>
-
     <!-- 设置按钮 -->
     <button 
         class="settings-btn glass-element icon-hover" 
@@ -313,6 +279,13 @@
                     </button>
                 </div>
 
+                <!-- 液态玻璃参数 -->
+                <h4 id="glass-heading">液态玻璃</h4>
+                <div class="setting-group">
+                    <button id="glass-tune-btn" class="glass-btn" type="button">调整液态玻璃</button>
+                    <p class="glass-hint">在页面右侧的参数面板中调整，可实时预览效果</p>
+                </div>
+
                 <!-- 背景设置 -->
                 <h4 id="bg-heading">背景</h4>
                 <div class="bg-settings">
@@ -442,6 +415,16 @@
         </div>
     </dialog>
 
+    <!-- 液态玻璃调参面板：非模态对话框（show()），不遮挡/不模糊页面，可实时预览 -->
+    <dialog id="glass-dialog" class="glass-dialog" aria-labelledby="glass-dialog-title">
+        <h3 class="dialog-title" id="glass-dialog-title">液态玻璃</h3>
+        <div id="glass-controls"></div>
+        <div id="glass-actions-row">
+            <button id="glass-reset-btn" class="glass-btn compact" type="button">恢复默认</button>
+            <button id="glass-close-btn" class="glass-btn compact primary" type="button">完成</button>
+        </div>
+    </dialog>
+
     <!-- 右键菜单 -->
     <div id="context-menu" class="context-menu glass-element hidden" role="menu" aria-hidden="true">
         <div class="menu-item" id="menu-edit" role="menuitem" tabindex="0">编辑</div>
@@ -451,6 +434,8 @@
     <!-- Toast 容器 -->
     <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 
+    <!-- iOS26 液態玻璃：基于物理折射的 SVG 滤镜引擎（须先于 script.js 加载） -->
+    <script src="liquid-glass.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
