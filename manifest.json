@@ -20,6 +20,8 @@
     "favicon"
   ],
   "host_permissions": [
+    "https://*/*",
+    "http://*/*",
     "https://t1.gstatic.com/*",
     "https://icons.duckduckgo.com/*",
     "https://www.google.com/s2/*",

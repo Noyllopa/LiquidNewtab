@@ -1275,17 +1275,47 @@ document.addEventListener('DOMContentLoaded', async () => {
         }).catch((e) => console.debug('[liquid-glass] 设置初始化失败:', e));
     }
 
+    // 下载远程图标并转为 data URL（经由 background 执行，借助 host_permissions 绕过 CORS）。
+    // 远程图标只下载一次，之后以 data URL 形态永久保存，避免每次打开新标签页都重新请求。
+    // 失败返回 null，调用方保留原 URL（页面 <img> 直接显示远程图片不受 CORS 限制）
+    async function fetchIconDataUrl(url, timeoutMs = 15000) {
+        try {
+            const response = await sendMessageWithTimeout({
+                action: 'fetchIcon',
+                url,
+                timeoutMs
+            }, timeoutMs + 5000);
+            if (response && response.success && response.dataUrl) {
+                return response.dataUrl;
+            }
+        } catch (e) {
+            console.debug('[icon] 远程图标下载失败:', url, e);
+        }
+        return null;
+    }
+
     // 保存快捷方式
     async function handleSaveShortcut(e) {
         if (e) e.preventDefault();
         const name = nameInput.value.trim();
         const finalUrl = normalizeHttpUrl(urlInput.value);
         const rawIcon = iconInput.value.trim();
-        const icon = sanitizeIconUrl(rawIcon);
+        let icon = sanitizeIconUrl(rawIcon);
 
         if (rawIcon && !icon) {
             showError('请输入有效的图标 URL 或上传图片');
             return;
+        }
+
+        // 远程 URL 图标：下载一次转为 data URL 后永久保存；失败则保留原 URL 并提示，
+        // 渲染阶段仍会尝试迁移（见 persistRemoteIcon）
+        if (icon && (icon.startsWith('http:') || icon.startsWith('https:'))) {
+            const persistedIcon = await fetchIconDataUrl(icon);
+            if (persistedIcon) {
+                icon = persistedIcon;
+            } else {
+                showToast('远程图标下载失败，已保留原 URL', 'error', 4000);
+            }
         }
 
         // 数量上限校验：超出上限的新增项会在渲染时被静默截断，必须在此拦截
@@ -1766,6 +1796,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // --- 4. 快捷方式渲染 ---
+    // 历史遗留的远程 URL 图标迁移为 data URL 的共享状态（位于渲染函数外，跨渲染保持）：
+    // - remoteIconFetches：按 URL 去重进行中的下载，避免并发渲染重复请求
+    // - failedRemoteIcons：会话内已确认无法固化的 URL，渲染阶段直接跳过，避免每次打开新标签页都重试
+    const remoteIconFetches = new Map();
+    const failedRemoteIcons = new Set();
+
+    // 远程 URL 图标一次性固化为 data URL：成功后更新磁贴并写入存储，
+    // 之后每次渲染直接使用本地 data URL，不再请求远程资源
+    async function persistRemoteIcon(index, url, imgElement, signal) {
+        if (failedRemoteIcons.has(url)) return;
+
+        let task = remoteIconFetches.get(url);
+        if (!task) {
+            task = fetchIconDataUrl(url).then(dataUrl => ({ dataUrl }));
+            remoteIconFetches.set(url, task);
+            try {
+                await task;
+            } finally {
+                remoteIconFetches.delete(url);
+            }
+        }
+        const { dataUrl } = await task;
+        if (!dataUrl) {
+            // 会话内负缓存：已确认无法固化的 URL 不再于每次渲染时重试
+            failedRemoteIcons.add(url);
+            return;
+        }
+        if (signal && signal.aborted) return;
+
+        failedRemoteIcons.delete(url);
+        if (imgElement.isConnected) imgElement.src = dataUrl;
+        // 写入前校验索引处的图标未被改动（防止固化期间拖拽重排导致错写）
+        if (shortcuts[index] && shortcuts[index].icon === url) {
+            shortcuts[index].icon = dataUrl;
+            try {
+                await Storage.set('shortcuts', JSON.stringify(shortcuts));
+            } catch {}
+        }
+    }
+
     async function renderShortcuts() {
         shortcutsAbortController.abort();
         shortcutsAbortController = new AbortController();
@@ -1824,6 +1894,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (item.icon) {
                 img.src = item.icon;
+                // 历史遗留的远程 URL 图标：后台一次性转 data URL 并固化到存储，
+                // 之后渲染直接使用本地 data URL，不再每次请求远程资源
+                if (item.icon.startsWith('http:') || item.icon.startsWith('https:')) {
+                    persistRemoteIcon(index, item.icon, img, signal);
+                }
             } else {
                 let domain;
                 try { domain = new URL(item.url).hostname; } catch { domain = null; }

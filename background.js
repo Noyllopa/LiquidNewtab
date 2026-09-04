@@ -46,6 +46,9 @@ const MAX_REMOTE_IMAGE_BYTES = 16 * 1024 * 1024; // 远程壁纸响应体大小�
 const MAX_JSON_BYTES = 5 * 1024 * 1024;          // 接口文本响应体大小上限
 const FAILED_FAVICON_TTL = 24 * 60 * 60 * 1000;  // 图标获取失败的负缓存时长，期内不再重试
 const MAX_FAVICON_CACHE_ENTRIES = 80; // 与 script.js 的 MAX_EXPORTED_FAVICONS 保持一致
+// 自定义图标 URL 固化的下载大小上限：base64 膨胀约 4/3，需保证转换后的
+// data URL 字符数不超过 script.js 的 MAX_ICON_DATA_URL_CHARS（750KB）
+const MAX_ICON_BLOB_BYTES = 512 * 1024;
 const ALLOWED_PAGE_PROTOCOLS = new Set(['http:', 'https:']);
 
 function normalizePageUrl(value) {
@@ -113,6 +116,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
         return true;
     }
+
+    if (request.action === 'fetchIcon') {
+        handleFetchIcon(request.url, request.timeoutMs || 15000)
+            .then((result) => {
+                sendResponse(result);
+            })
+            .catch((error) => {
+                console.error('[BG] fetchIcon 失败:', error);
+                sendResponse({ success: false, error: error.message || '图标下载失败' });
+            });
+        return true;
+    }
 });
 
 // 有界读取响应体：超过 maxBytes 立即中止，防止超大远程文件耗尽 Service Worker 内存
@@ -175,9 +190,29 @@ async function handleFetchJson(url, timeoutMs) {
         // 尝试解析为 JSON；若失败则返回原始文本（可能是 XML），由调用端处理
         try {
             return { type: 'json', data: JSON.parse(text) };
-        } catch {
+        } catch (err) {
             return { type: 'text', data: text };
         }
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+// 下载远程自定义图标并转为 data URL：图标只应下载一次，之后以 data URL 形态
+// 永久存入 shortcuts，避免每次打开新标签页都重新请求远程资源
+async function handleFetchIcon(url, timeoutMs) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const blob = await readBodyWithCap(response, MAX_ICON_BLOB_BYTES);
+        if (blob.size < 50) throw new Error('远程资源过小，无法用作图标');
+        if (blob.type && blob.type !== 'application/octet-stream' && !blob.type.startsWith('image/')) {
+            throw new Error('远程资源不是图片');
+        }
+        const dataUrl = await blobToDataUrl(blob);
+        return { success: true, dataUrl };
     } finally {
         clearTimeout(timeoutId);
     }
