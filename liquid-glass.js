@@ -128,9 +128,13 @@
         const k = 1 - eta * eta * (1 - cosI * cosI);
         if (k < 0) return null;                      // Total Internal Reflection
         const sq = Math.sqrt(k);
+        // y 分量为折射光线在玻璃内向下行进的分量（y 轴向下）：
+        // 恒 ≥ eta > 0，eta<1（空气进入玻璃）时不存在全反射，也不会过零。
+        // 此前误写为减号：ior≥2 时该分量会在部分斜面倾角处过零/变负，
+        // 导致 profile 出现「除以趋近 0 的 ray.y」→ 位移爆炸、内圈采样整段失效。
         return {
             x: -(eta * cosI + sq) * normalX,
-            y: eta - (eta * cosI + sq) * normalY,
+            y: eta + (eta * cosI + sq) * normalY,
         };
     }
 
