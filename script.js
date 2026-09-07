@@ -1645,7 +1645,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const url = URL.createObjectURL(dataBlob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = 'liquid-newtab-data.json';
+        const now = new Date();
+        const dateTag = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        link.download = `liquid-newtab-data-${dateTag}.json`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
