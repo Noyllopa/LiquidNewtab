@@ -111,6 +111,9 @@ function sanitizeIconUrl(value) {
         if (url.protocol === 'chrome-extension:') {
             const currentExtensionOrigin = new URL(chrome.runtime.getURL('/')).origin;
             if (url.origin !== currentExtensionOrigin) return null;
+            // _favicon 代理 URL 含扩展 ID，重装/换机后失效，且会把“自动获取”
+            // 固化为一条不随缓存更新的代理地址，禁止作为图标持久化
+            if (url.pathname.startsWith('/_favicon')) return null;
         }
         return url.toString();
     } catch {
@@ -2121,18 +2124,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (response && response.dataUrl) {
                 iconInput.value = response.dataUrl;
+                iconPreviewFallback = null;
             } else {
-                const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
-                urlObj.searchParams.set("pageUrl", fullUrl);
-                urlObj.searchParams.set("size", "128");
-                iconInput.value = urlObj.toString();
+                // 获取失败：不写入输入框（保持"自动获取"语义），仅更新预览。
+                // _favicon 代理 URL 含扩展 ID，持久化后换机/重装即失效
+                iconInput.value = '';
+                iconPreviewFallback = buildFaviconPreviewUrl(fullUrl);
             }
             updateIconPreview();
         } catch {
-            const urlObj = new URL(chrome.runtime.getURL("/_favicon/"));
-            urlObj.searchParams.set("pageUrl", fullUrl);
-            urlObj.searchParams.set("size", "128");
-            iconInput.value = urlObj.toString();
+            iconInput.value = '';
+            iconPreviewFallback = buildFaviconPreviewUrl(fullUrl);
             updateIconPreview();
         } finally {
             refreshIconBtn.disabled = false;
