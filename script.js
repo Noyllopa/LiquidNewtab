@@ -2574,5 +2574,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
+    // 对话框关闭后，挂在其内部（顶层）的 toast 不可见，连同容器一并移除，
+    // 避免空容器在对话框内残留累积；toast 自身的移除定时器对已分离节点无害
+    document.querySelectorAll('.glass-dialog').forEach(dlg => {
+        dlg.addEventListener('close', () => {
+            dlg.querySelectorAll(':scope > .toast-container--dialog').forEach(c => c.remove());
+        });
+    });
+
     initDragAndDrop();
 });
