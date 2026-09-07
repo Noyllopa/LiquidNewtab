@@ -221,7 +221,10 @@ function validateImportedData(data) {
         bingLastFetch: data.bingLastFetch === undefined ? undefined : clampNumber(data.bingLastFetch, 0, Number.MAX_SAFE_INTEGER, 0),
         bingBg: data.bingBg === undefined ? undefined : sanitizeBackgroundValue(data.bingBg),
         colorMode: data.colorMode === undefined ? undefined : sanitizeColorMode(data.colorMode),
-        favicons: data.favicons === undefined ? undefined : sanitizeFaviconCache(data.favicons)
+        favicons: data.favicons === undefined ? undefined : sanitizeFaviconCache(data.favicons),
+        // 液态玻璃参数：结构合法性由 liquid-glass.js 的 sanitizeSettings 权威校验
+        glassParams: (data.glassParams && typeof data.glassParams === 'object' && !Array.isArray(data.glassParams))
+            ? data.glassParams : undefined
     };
 }
 
@@ -1267,6 +1270,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         };
 
+        // 外部变更（如数据导入）时同步滑杆 UI
+        window.addEventListener('liquidglass:settingschange', () => {
+            glassState = window.LiquidGlass.getSettings();
+            syncGlassUI();
+        });
+
         // 等持久化参数加载完成后再初始化 UI 状态，避免默认值闪现覆盖已存值
         window.LiquidGlass.ready.then(() => {
             glassState = window.LiquidGlass.getSettings();
@@ -1565,7 +1574,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 数据导出功能
     exportDataBtn.addEventListener('click', async () => {
         // 并行读取，避免大体积壁纸项串行等待
-        const [gridCols, gridSize, scale, customBg, bgMode, bingQuality, bingInterval, bingLastFetch, bingBg, colorMode] = await Promise.all([
+        const [gridCols, gridSize, scale, customBg, bgMode, bingQuality, bingInterval, bingLastFetch, bingBg, colorMode, glassParams] = await Promise.all([
             Storage.get('gridCols', 5),
             Storage.get('gridSize', 100),
             Storage.get('scale', 100), // 显示比例设置
@@ -1575,7 +1584,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             Storage.get('bingInterval', DEFAULT_BING_INTERVAL),
             Storage.get('bingLastFetch', 0),
             Storage.get('bingBg'),
-            Storage.get('colorMode', 'auto') // 颜色模式设置
+            Storage.get('colorMode', 'auto'), // 颜色模式设置
+            Storage.get(GLASS_STORAGE_KEY) // 液态玻璃参数
         ]);
         const exportData = {
             shortcuts: sanitizeShortcuts(shortcuts, DEFAULT_SHORTCUTS),
@@ -1588,7 +1598,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             bingInterval,
             bingLastFetch,
             bingBg,
-            colorMode
+            colorMode,
+            glassParams: glassParams === null ? undefined : glassParams
         };
         
         // 收集所有favicon缓存
@@ -1712,6 +1723,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                     try { localStorage.setItem('_colorMode', importData.colorMode); } catch(e) {}
                 }
                 
+                // 导入液态玻璃参数（applySettings 内部完成区间校验并热更新滤镜）
+                if (importData.glassParams !== undefined) {
+                    if (window.LiquidGlass) {
+                        const sanitizedGlass = window.LiquidGlass.applySettings(importData.glassParams);
+                        await Storage.setImmediate(GLASS_STORAGE_KEY, sanitizedGlass);
+                        window.dispatchEvent(new CustomEvent('liquidglass:settingschange'));
+                    } else {
+                        await Storage.setImmediate(GLASS_STORAGE_KEY, importData.glassParams);
+                    }
+                }
+
                 // 导入favicon缓存
                 if (importData.favicons !== undefined) {
                     // 收集所有favicon键
