@@ -1328,13 +1328,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 } else {
                     delete shortcuts[editIndex].icon;
                 }
-                await Storage.set('shortcuts', JSON.stringify(shortcuts));
+                await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
                 await renderShortcuts();
             } else {
                 const newItem = { name: name.slice(0, MAX_SHORTCUT_NAME_LENGTH), url: finalUrl };
                 if (icon) newItem.icon = icon;
                 shortcuts.push(newItem);
-                await Storage.set('shortcuts', JSON.stringify(shortcuts));
+                await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
                 await renderShortcuts(); 
             }
             
@@ -2079,7 +2079,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             
             shortcuts = newShortcuts;
-            await Storage.set('shortcuts', JSON.stringify(shortcuts));
+            await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
         }, { signal });
     }
     
@@ -2239,7 +2239,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 边界校验：菜单打开期间快捷方式列表可能已变化（如其他页面导入数据），防止误删或越界
         if (contextMenuIndex > -1 && contextMenuIndex < shortcuts.length) { 
             shortcuts.splice(contextMenuIndex, 1); 
-            Storage.set('shortcuts', JSON.stringify(shortcuts));
+            Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
             renderShortcuts(); 
         } 
     }
