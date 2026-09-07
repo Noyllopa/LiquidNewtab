@@ -144,6 +144,15 @@ function sanitizeShortcuts(value, fallback = []) {
     return result;
 }
 
+// 主题解析回退链（唯一权威实现）：上次权威计算结果 → 系统偏好。
+// theme-init.js 为首绘前同步执行无法复用本函数，其内联逻辑须与此保持一致
+function getCachedOrSystemTheme() {
+    let cached = null;
+    try { cached = localStorage.getItem('_resolvedTheme'); } catch(e) {}
+    if (cached === 'light' || cached === 'dark') return cached;
+    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
 function parseJsonSafe(value, fallback) {
     if (typeof value !== 'string') return fallback;
     try {
@@ -388,13 +397,7 @@ document.addEventListener('visibilitychange', () => {
         earlyTheme = colorModeValue;
     } else {
         // 自动模式：用上次权威计算结果，缺失时回退系统偏好
-        let cached;
-        try { cached = localStorage.getItem('_resolvedTheme'); } catch(e) {}
-        if (cached === 'light' || cached === 'dark') {
-            earlyTheme = cached;
-        } else {
-            earlyTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        }
+        earlyTheme = getCachedOrSystemTheme();
     }
 
     if (document.body) {
@@ -2356,10 +2359,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 let bgModeNow;
                 try { bgModeNow = localStorage.getItem('_bgMode'); } catch(e) {}
                 if (bgModeNow === 'bing' || bgModeNow === 'custom') {
-                    let cached;
-                    try { cached = localStorage.getItem('_resolvedTheme'); } catch(e) {}
-                    currentTheme = (cached === 'light' || cached === 'dark') ? cached
-                        : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+                    currentTheme = getCachedOrSystemTheme();
                 } else {
                     currentTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
                 }
@@ -2558,13 +2558,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (document.body.classList.contains('dark-bg')) {
             dark = true;
         } else {
-            let cached = null;
-            try { cached = localStorage.getItem('_resolvedTheme'); } catch(e) {}
-            if (cached === 'light' || cached === 'dark') {
-                dark = cached === 'dark';
-            } else {
-                dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            }
+            dark = getCachedOrSystemTheme() === 'dark';
         }
         dialogs.forEach(dialog => {
             dialog.classList.remove('light-bg', 'dark-mode');
