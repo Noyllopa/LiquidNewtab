@@ -1845,6 +1845,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // --- 4. 快捷方式渲染 ---
     async function renderShortcuts() {
+        // 拖拽排序期间 DOM 顺序领先于 shortcuts 数组（dragend 才重排），
+        // 此时若被外部触发重渲染（如其他标签页导入数据）会以旧数组回跳，直接跳过
+        if (currentDragElement) return;
         shortcutsAbortController.abort();
         shortcutsAbortController = new AbortController();
         const signal = shortcutsAbortController.signal;
