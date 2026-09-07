@@ -305,9 +305,19 @@
 
         // maximumDisplacement 直接作为 scale，将归一化位移还原为真实像素
         const scale = maxDisp * cfg.refractionLevel;
-        const dispUrl = generateDisplacementMap(w, h, r, bezelW, profile, maxDisp);
+
+        // 大元素降采样生成贴图：位移场/高光场均为低频信号，半分辨率生成后由
+        // feImage 拉伸回元素尺寸，视觉无损但像素计算量降至 1/4（三分之一则 1/9）
+        const px = w * h;
+        const ds = px > 160000 ? 3 : px > 40000 ? 2 : 1;
+        const mw = Math.max(1, Math.round(w / ds));
+        const mh = Math.max(1, Math.round(h / ds));
+        const mr = r / ds;
+        const mBezel = Math.max(1, bezelW / ds);
+
+        const dispUrl = generateDisplacementMap(mw, mh, mr, mBezel, profile, maxDisp);
         // 高光带宽与斜面等宽：过宽的光环会在深色背景上形成“内发光”晕
-        const specUrl = generateSpecularMap(w, h, r, bezelW, cfg.specAngle);
+        const specUrl = generateSpecularMap(mw, mh, mr, mBezel, cfg.specAngle);
 
         const id = `lg-f-${++seq}`;
         const filter = el('filter', {
@@ -406,9 +416,14 @@
         }
     }
 
+    let refreshScheduled = false;
     function scheduleRefresh() {
+        // 合并调度：滑杆拖动等高频调用在同一帧内只执行一次实际刷新
+        if (refreshScheduled) return;
+        refreshScheduled = true;
         // 双 rAF：确保布局与样式稳定后再测量元素尺寸
         requestAnimationFrame(() => requestAnimationFrame(() => {
+            refreshScheduled = false;
             try { refresh(); } catch (e) { console.debug('[liquid-glass] 刷新失败', e); }
         }));
     }
