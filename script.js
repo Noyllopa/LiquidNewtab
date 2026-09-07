@@ -918,28 +918,43 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (externalSignal && externalSignal.aborted) throw new DOMException('Aborted', 'AbortError');
 
         // 4. 下载图片并转为 Data URL（超时 65 秒，略大于 background 内部的 60 秒超时）
-        let imgResponse;
-        try {
-            imgResponse = await sendMessageWithTimeout({
-                action: 'fetchWallpaper',
-                url: imageUrl,
-                timeoutMs: 60000
-            }, 65000, externalSignal);
-        } catch (msgError) {
-            if (msgError.name === 'AbortError') throw msgError;
-            if (msgError.name === 'TimeoutError') {
-                throw new DOMException('图片下载超时：Service Worker 无响应，请检查网络或重新加载扩展', 'TimeoutError');
+        // Bing 部分壁纸没有 UHD 版本（404），UHD 失败时自动回退 1080P 再试一次
+        const tryDownload = async (url) => {
+            let imgResponse;
+            try {
+                imgResponse = await sendMessageWithTimeout({
+                    action: 'fetchWallpaper',
+                    url,
+                    timeoutMs: 60000
+                }, 65000, externalSignal);
+            } catch (msgError) {
+                if (msgError.name === 'AbortError') throw msgError;
+                if (msgError.name === 'TimeoutError') {
+                    throw new DOMException('图片下载超时：Service Worker 无响应，请检查网络或重新加载扩展', 'TimeoutError');
+                }
+                console.error('[fetchBingWallpaper] 图片下载异常:', msgError);
+                throw new TypeError(`图片下载失败: ${msgError.message}`);
             }
-            console.error('[fetchBingWallpaper] 图片下载异常:', msgError);
-            throw new TypeError(`图片下载失败: ${msgError.message}`);
+            if (externalSignal && externalSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+            if (!imgResponse || !imgResponse.success) {
+                const detail = !imgResponse ? '后台无响应'
+                    : (imgResponse.error || '图片下载失败');
+                throw new TypeError(detail);
+            }
+            return imgResponse.dataUrl;
+        };
+
+        try {
+            return await tryDownload(imageUrl);
+        } catch (firstError) {
+            if (firstError.name === 'AbortError' || firstError.name === 'TimeoutError') throw firstError;
+            if (qualityTag === BING_QUALITY_MAP.uhd) {
+                const fallbackUrl = `${BING_API_BASE}${pickedBase}_${BING_QUALITY_MAP.hd}.jpg`;
+                console.warn('[fetchBingWallpaper] UHD 下载失败，回退 1080P:', firstError.message);
+                return await tryDownload(fallbackUrl);
+            }
+            throw firstError;
         }
-        if (externalSignal && externalSignal.aborted) throw new DOMException('Aborted', 'AbortError');
-        if (!imgResponse || !imgResponse.success) {
-            const detail = !imgResponse ? '后台无响应'
-                : (imgResponse.error || '图片下载失败');
-            throw new TypeError(detail);
-        }
-        return imgResponse.dataUrl;
     }
 
     // 获取必应壁纸；force=true 忽略间隔强制获取（换一张、切换画质时用）
