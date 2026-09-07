@@ -283,6 +283,10 @@ const Storage = (function() {
 
     return {
         get(key, defaultVal = null) {
+            // 防抖窗口内优先返回待写入的新值，避免"刚 set 完 get 回旧值"
+            if (Object.prototype.hasOwnProperty.call(pendingWrites, key)) {
+                return Promise.resolve(pendingWrites[key]);
+            }
             return new Promise(resolve => {
                 chrome.storage.local.get([key], res => {
                     if (chrome.runtime.lastError) {
