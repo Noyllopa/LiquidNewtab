@@ -1920,6 +1920,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             img.alt = '';
             img.setAttribute('aria-hidden', 'true');
+            // 自定义图标允许任意 http(s) URL，不向第三方站点泄露 referrer
+            img.referrerPolicy = 'no-referrer';
             span.textContent = item.name;
             span.title = item.name;
 
