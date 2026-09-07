@@ -1087,6 +1087,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             panel.classList.toggle('active', active);
             panel.hidden = !active;
         });
+
+        // 面板切换会改变对话框内容高度，折射滤镜须按新尺寸重新挂接，
+        // 否则边缘高光/位移仍按旧尺寸计算而错位
+        if (window.LiquidGlass) { try { window.LiquidGlass.refresh(); } catch {} }
     }
 
     settingsTabs.forEach(tab => {
