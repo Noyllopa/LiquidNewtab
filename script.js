@@ -1513,6 +1513,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        // SVG 无固有尺寸时 canvas 解码得到 0×0 画布（输出全黑），
+        // 且矢量图位图化无意义，直接拦截
+        if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) {
+            showError('不支持 SVG 图片作为背景，请选择 JPG / PNG / WebP');
+            bgUploadInput.value = '';
+            return;
+        }
+
         const reader = new FileReader();
         reader.onload = async function(event) {
             const base64String = event.target.result;
