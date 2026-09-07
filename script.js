@@ -2295,14 +2295,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 iconInput.value = response.dataUrl;
                 iconPreviewFallback = null;
             } else {
-                // 获取失败：不写入输入框（保持"自动获取"语义），仅更新预览。
+                // 获取失败：不改动输入框（保留用户已输入的自定义 URL；
+                // 未输入时保持"自动获取"语义），仅更新预览兜底。
                 // _favicon 代理 URL 含扩展 ID，持久化后换机/重装即失效
-                iconInput.value = '';
                 iconPreviewFallback = buildFaviconPreviewUrl(fullUrl);
             }
             updateIconPreview();
         } catch {
-            iconInput.value = '';
             iconPreviewFallback = buildFaviconPreviewUrl(fullUrl);
             updateIconPreview();
         } finally {
