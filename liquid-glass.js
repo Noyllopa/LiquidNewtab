@@ -339,7 +339,7 @@
         }
 
         filter.appendChild(el('feImage', {
-            href: dispUrl, x: 0, y: 0, width: w, height: h, result: 'displacement_map',
+            href: dispUrl, x: 0, y: 0, width: w, height: h, result: 'displacement_map', preserveAspectRatio: 'none',
         }));
         filter.appendChild(el('feDisplacementMap', {
             in: src, in2: 'displacement_map', scale,
@@ -356,7 +356,7 @@
         }
 
         filter.appendChild(el('feImage', {
-            href: specUrl, x: 0, y: 0, width: w, height: h, result: 'spec_layer',
+            href: specUrl, x: 0, y: 0, width: w, height: h, result: 'spec_layer', preserveAspectRatio: 'none',
         }));
         filter.appendChild(el('feComposite', {
             in: satSrc, in2: 'spec_layer', operator: 'in', result: 'spec_masked',
