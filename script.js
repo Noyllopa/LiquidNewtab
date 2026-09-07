@@ -486,6 +486,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         Storage.get('bgMode', 'default').then(sanitizeBgMode)
     ]);
     try { localStorage.setItem('_colorMode', savedColorMode); localStorage.setItem('_bgMode', savedBgMode); } catch(e) {}
+    // 运行时颜色模式缓存：避免 applyBackground 等热路径反复跨进程读 storage；
+    // 仅在颜色模式按钮点击与数据导入时更新
+    let currentColorMode = savedColorMode;
     await applyColorMode(savedColorMode);
 
     // 数据管理元素
@@ -727,8 +730,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             stopBlobAnimation();
             
             // 仅自动模式下检测背景亮度；手动模式是用户显式选择，不被壁纸亮度覆盖
-            const colorModeNow = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
-            if (colorModeNow === 'auto') {
+            if (currentColorMode === 'auto') {
                 await detectBackgroundColor(safeBgUrl);
             }
         } else {
@@ -744,7 +746,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             restartBlobAnimation();
             
             // 移除背景后重新应用颜色模式（自动模式将恢复跟随系统主题）
-            const currentColorMode = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
             await applyColorMode(currentColorMode);
         }
     }
@@ -1041,7 +1042,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 对话框极性跟随页面解析主题（见 syncDialogTheme）
         syncDialogTheme();
 
-        const currentColorMode = sanitizeColorMode(await Storage.get('colorMode', 'auto'));
         // 仅自动模式且无自定义背景时跟随系统主题变化；
         // 有自定义背景时颜色由背景亮度决定，不随系统主题切换
         if (currentColorMode === 'auto' && !document.documentElement.classList.contains('has-custom-bg')) {
@@ -1169,6 +1169,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const mode = sanitizeColorMode(button.dataset.mode);
             
             // 保存设置
+            currentColorMode = mode;
             await Storage.set('colorMode', mode);
             try { localStorage.setItem('_colorMode', mode); } catch(e) {}
             
@@ -1777,7 +1778,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const gridSize = clampNumber(rawGridSize, 80, 160, 100);
                 const scale = clampNumber(rawScale, 50, 200, 100);
                 const colorMode = sanitizeColorMode(rawColorMode);
-                
+                currentColorMode = colorMode;
+
                 applyLayoutSettings(gridCols, gridSize, scale);
                 colInput.value = gridCols;
                 colValDisplay.innerText = gridCols;
