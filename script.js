@@ -1635,6 +1635,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         const file = e.target.files[0];
         if (!file) return;
 
+        // 超大文件 readAsText + JSON.parse 会直接卡死页面；正常导出
+        // （含 12MB 上限的壁纸 data URL × 2）远低于此阈值
+        if (file.size > 32 * 1024 * 1024) {
+            showError('文件过大（超过 32MB），请选择有效的导出文件');
+            importDataInput.value = '';
+            return;
+        }
+
         // 导入会覆盖现有全部数据，属破坏性操作，须二次确认
         if (!window.confirm('导入将覆盖当前的快捷方式、布局、外观与背景数据，确定继续吗？')) {
             importDataInput.value = '';
