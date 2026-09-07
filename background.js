@@ -45,6 +45,18 @@ const MAX_FAVICON_BLOB_BYTES = 128 * 1024;
 const MAX_REMOTE_IMAGE_BYTES = 16 * 1024 * 1024; // 远程壁纸响应体大小上限（与 script.js 一致）
 const MAX_JSON_BYTES = 5 * 1024 * 1024;          // 接口文本响应体大小上限
 const FAILED_FAVICON_TTL = 24 * 60 * 60 * 1000;  // 图标获取失败的负缓存时长，期内不再重试
+const FAVICON_INDEX_KEY = '_faviconKeys'; // favicon 键索引：导出时免 get(null) 全量读（含数 MB 壁纸）
+
+async function addToFaviconIndex(key) {
+    try {
+        const res = await chrome.storage.local.get(FAVICON_INDEX_KEY);
+        const keys = Array.isArray(res[FAVICON_INDEX_KEY]) ? res[FAVICON_INDEX_KEY] : [];
+        if (!keys.includes(key)) {
+            keys.push(key);
+            await chrome.storage.local.set({ [FAVICON_INDEX_KEY]: keys });
+        }
+    } catch {}
+}
 const MAX_FAVICON_CACHE_ENTRIES = 80; // 与 script.js 的 MAX_EXPORTED_FAVICONS 保持一致
 const ALLOWED_PAGE_PROTOCOLS = new Set(['http:', 'https:']);
 
@@ -254,6 +266,7 @@ async function handleGetBestFavicon(pageUrl, forceRefresh) {
                 height: bestResult.height
             }
         });
+        await addToFaviconIndex(cacheKey);
         await pruneFaviconCache();
     } catch {}
 
@@ -350,6 +363,12 @@ async function pruneFaviconCache(force = false) {
         if (keysToRemove.length > 0) {
             await chrome.storage.local.remove(keysToRemove);
         }
+        // 同步键索引（含未淘汰的负缓存键）
+        try {
+            await chrome.storage.local.set({
+                [FAVICON_INDEX_KEY]: faviconEntries.slice(0, MAX_FAVICON_CACHE_ENTRIES).map(([key]) => key)
+            });
+        } catch {}
     }
 
     try {

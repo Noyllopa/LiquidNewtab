@@ -1610,29 +1610,33 @@ document.addEventListener('DOMContentLoaded', async () => {
             glassParams: glassParams === null ? undefined : glassParams
         };
         
-        // 收集所有favicon缓存
-        const favicons = {};
-        // 获取所有存储项
-        await new Promise(resolve => {
-            chrome.storage.local.get(null, (items = {}) => {
-                if (chrome.runtime.lastError) {
-                    console.error('Storage read error:', chrome.runtime.lastError);
-                    resolve();
-                    return;
-                }
-                const keys = Object.keys(items)
-                    .filter(key => key.startsWith('favicon_'))
-                    .sort((a, b) => Number(items[b]?.timestamp || 0) - Number(items[a]?.timestamp || 0))
-                    .slice(0, MAX_EXPORTED_FAVICONS);
-
-                keys.forEach(key => {
-                    if (key.startsWith('favicon_')) {
-                        favicons[key] = items[key];
-                    }
+        // 收集所有favicon缓存：优先按键索引按需读取，避免 get(null) 把
+        // 数 MB 的壁纸 data URL 一起读入内存；索引缺失（旧版本数据）时
+        // 回退全量扫描一次并重建索引
+        let favicons = {};
+        const faviconIndex = await Storage.get('_faviconKeys', null);
+        if (Array.isArray(faviconIndex)) {
+            const indexKeys = faviconIndex.filter(k => typeof k === 'string' && k.startsWith('favicon_'));
+            if (indexKeys.length > 0) {
+                const items = await new Promise(resolve => {
+                    chrome.storage.local.get(indexKeys, res => resolve(chrome.runtime.lastError ? {} : res));
                 });
-                resolve();
+                favicons = items;
+            }
+        } else {
+            const items = await new Promise(resolve => {
+                chrome.storage.local.get(null, res => resolve(chrome.runtime.lastError ? {} : (res || {})));
             });
-        });
+            const keys = Object.keys(items).filter(key => key.startsWith('favicon_'));
+            keys.forEach(key => { favicons[key] = items[key]; });
+            // 重建索引，后续导出/导入走按需读取路径
+            Storage.setImmediate('_faviconKeys', keys);
+        }
+        favicons = Object.fromEntries(
+            Object.entries(favicons)
+                .sort((a, b) => Number(b[1]?.timestamp || 0) - Number(a[1]?.timestamp || 0))
+                .slice(0, MAX_EXPORTED_FAVICONS)
+        );
         exportData.favicons = sanitizeFaviconCache(favicons);
 
         // 创建一个 Blob 对象并下载
@@ -1744,31 +1748,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 // 导入favicon缓存
                 if (importData.favicons !== undefined) {
-                    // 收集所有favicon键
-                    const faviconKeys = [];
-                    await new Promise(resolve => {
-                        chrome.storage.local.get(null, (items = {}) => {
-                            if (chrome.runtime.lastError) {
-                                console.error('Storage read error:', chrome.runtime.lastError);
-                                resolve();
-                                return;
-                            }
-                            Object.keys(items).forEach(key => {
-                                if (key.startsWith('favicon_')) {
-                                    faviconKeys.push(key);
+                    // 收集所有favicon键（优先键索引，缺失时回退全量扫描）
+                    let faviconKeys = [];
+                    const importIndex = await Storage.get('_faviconKeys', null);
+                    if (Array.isArray(importIndex)) {
+                        faviconKeys = importIndex.filter(k => typeof k === 'string' && k.startsWith('favicon_'));
+                    } else {
+                        await new Promise(resolve => {
+                            chrome.storage.local.get(null, (items = {}) => {
+                                if (!chrome.runtime.lastError) {
+                                    Object.keys(items).forEach(key => {
+                                        if (key.startsWith('favicon_')) faviconKeys.push(key);
+                                    });
                                 }
+                                resolve();
                             });
-                            resolve();
                         });
-                    });
-                    
+                    }
+
                     // 清除现有的favicon缓存
                     if (faviconKeys.length > 0) {
                         await Storage.remove(faviconKeys);
                     }
-                    
-                    // 导入新的favicon缓存
+
+                    // 导入新的favicon缓存并重建键索引
                     await Storage.setBatch(importData.favicons);
+                    await Storage.setImmediate('_faviconKeys', Object.keys(importData.favicons));
                 }
                 
                 // 更新UI
