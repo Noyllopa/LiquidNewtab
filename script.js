@@ -1338,8 +1338,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 保存快捷方式
+    // 保存重入守卫：远程图标固化最长 ~20s（fetchIconDataUrl），期间重复提交
+    // 会产生重复快捷方式
+    let savingShortcut = false;
+
     async function handleSaveShortcut(e) {
         if (e) e.preventDefault();
+        if (savingShortcut) return;
         const name = nameInput.value.trim();
         const finalUrl = normalizeHttpUrl(urlInput.value);
         const rawIcon = iconInput.value.trim();
@@ -1352,6 +1357,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 远程 URL 图标：下载一次转为 data URL 后永久保存；失败则保留原 URL 并提示，
         // 渲染阶段仍会尝试迁移（见 persistRemoteIcon）
+        savingShortcut = true;
+        saveBtn.disabled = true;
+        try {
         if (icon && (icon.startsWith('http:') || icon.startsWith('https:'))) {
             const persistedIcon = await fetchIconDataUrl(icon);
             if (persistedIcon) {
@@ -1388,6 +1396,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             editDialog.close();
         } else {
             showError('请输入有效的名称和网址');
+        }
+        } finally {
+            savingShortcut = false;
+            saveBtn.disabled = false;
         }
     }
 
