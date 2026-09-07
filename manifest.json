@@ -21,12 +21,7 @@
   ],
   "host_permissions": [
     "https://*/*",
-    "http://*/*",
-    "https://t1.gstatic.com/*",
-    "https://icons.duckduckgo.com/*",
-    "https://www.google.com/s2/*",
-    "https://icon.horse/*",
-    "https://*.bing.com/*"
+    "http://*/*"
   ],
   "background": {
     "service_worker": "background.js"
