@@ -479,6 +479,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     let bingAbortController = null;
     // 画质切换时有抓取进行中而被迫跳过：登记后待其结束自动按新画质补一次抓取
     let bingRefetchPending = false;
+    // 抓取并发守卫（独立状态标志，不依赖按钮 class 这类 UI 状态）
+    let bingFetching = false;
 
     // 最高优先级：立即确认颜色模式，须在 renderShortcuts / loadBgSettings 等耗时操作之前执行
     const [savedColorMode, savedBgMode] = await Promise.all([
@@ -970,7 +972,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 获取必应壁纸；force=true 忽略间隔强制获取（换一张、切换画质时用）
     async function fetchBing(force = false) {
-        if (bingRefreshBtn.classList.contains('loading')) return;
+        if (bingFetching) return;
 
         const now = Date.now();
         const lastFetch = Number(await Storage.get('bingLastFetch', 0)) || 0;
@@ -980,6 +982,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (cached) return;
         }
 
+        bingFetching = true;
         bingRefreshBtn.classList.add('loading');
         bingRefreshBtn.disabled = true;
         const myToken = ++bgActionToken;
@@ -1010,6 +1013,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.error('[BingWallpaper]', error);
         } finally {
             if (bingAbortController === controller) bingAbortController = null;
+            bingFetching = false;
             bingRefreshBtn.classList.remove('loading');
             bingRefreshBtn.disabled = false;
             // 抓取期间用户切换过画质：仍处于必应壁纸模式时按最新画质补一次抓取
@@ -1490,8 +1494,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 b.setAttribute('aria-checked', active ? 'true' : 'false');
             });
             // 切换画质后立即按新画质重新获取壁纸；
-            // 若已有抓取进行中（fetchBing 的 loading 守卫会跳过），登记后由其 finally 补抓
-            if (bingRefreshBtn.classList.contains('loading')) {
+            // 若已有抓取进行中（fetchBing 的并发守卫会跳过），登记后由其 finally 补抓
+            if (bingFetching) {
                 bingRefetchPending = true;
                 return;
             }
