@@ -310,6 +310,37 @@ const Storage = (function() {
                 });
             });
         },
+
+        // 批量读取：单次跨进程往返替代 get 的逐键 N 次往返，
+        // 用于启动首屏关键路径（首帧前尽快拿到配置，减少串行等待）
+        getMany(keys, defaults = {}) {
+            const keyList = Array.isArray(keys) ? keys : [];
+            const result = {};
+            const missing = [];
+            for (const key of keyList) {
+                // 与 get 语义一致：防抖窗口内优先返回待写入的新值
+                if (Object.prototype.hasOwnProperty.call(pendingWrites, key)) {
+                    result[key] = pendingWrites[key];
+                } else {
+                    missing.push(key);
+                }
+            }
+            if (missing.length === 0) {
+                return Promise.resolve(result);
+            }
+            return new Promise(resolve => {
+                chrome.storage.local.get(missing, res => {
+                    if (chrome.runtime.lastError) {
+                        console.error('Storage read error:', chrome.runtime.lastError);
+                    }
+                    const items = res || {};
+                    for (const key of missing) {
+                        result[key] = key in items ? items[key] : defaults[key];
+                    }
+                    resolve(result);
+                });
+            });
+        },
         
         set(key, value) {
             return scheduleWrite(key, value);
@@ -370,6 +401,12 @@ window.addEventListener('beforeunload', () => {
     Storage.flush();
 });
 
+// 页面启动关键配置一次性预读取：在脚本解析期即发起存储 IPC，早于首帧绘制；
+// 早启动脚本（theme-init.js 已靠 localStorage 镜像直接出壁纸）与 DOMContentLoaded
+// 初始化共用这份结果，把原来"逐键、多次、串行"的跨进程读取压缩为单次往返
+const EARLY_SETTINGS_KEYS = ['colorMode', 'bgMode', 'gridCols', 'gridSize', 'scale', 'shortcuts'];
+const earlySettingsPromise = Storage.getMany(EARLY_SETTINGS_KEYS, {});
+
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
         Storage.flush();
@@ -379,12 +416,9 @@ document.addEventListener('visibilitychange', () => {
 // 在页面加载早期获取并应用背景与颜色模式，避免闪烁
 (async function() {
     // 先读小值配置立即应用主题，须在读取大体积壁纸之前完成，否则阻塞导致"先深后浅"闪烁
-    const [rawBgMode, rawColorMode] = await Promise.all([
-        Storage.get('bgMode', 'default'),
-        Storage.get('colorMode', 'auto')
-    ]);
-    const bgModeValue = sanitizeBgMode(rawBgMode);
-    const colorModeValue = sanitizeColorMode(rawColorMode);
+    const earlySettings = await earlySettingsPromise;
+    const bgModeValue = sanitizeBgMode(earlySettings.bgMode);
+    const colorModeValue = sanitizeColorMode(earlySettings.colorMode);
 
     // 确定主题（与 <head> 防闪脚本逻辑一致）
     let earlyTheme;
@@ -437,6 +471,19 @@ document.addEventListener('visibilitychange', () => {
         document.body.style.backgroundImage = `url('${earlyImage}')`;
         document.documentElement.classList.add('has-custom-bg');
         try { localStorage.setItem('_hasCustomBg', '1'); } catch(e) {}
+        // 同步镜像壁纸，供下个新标签页首帧前由 theme-init.js 直接应用（优先走
+        // localStorage：同步读取、无跨进程 IPC，还省去重复解码）
+        try { localStorage.setItem('_bgImage', earlyImage); } catch(e) {
+            // 壁纸超过 localStorage 配额（自定义大图场景）：不镜像，退回异步读取路径
+            try { localStorage.removeItem('_bgImage'); } catch(e2) {}
+        }
+    } else {
+        // 存储中无壁纸但镜像仍残留（如数据导入/重置导致存储已清空，或旧版本
+        // 页面写入的镜像）：撤销首帧镜像，避免陈旧壁纸残留到本页与后续页面
+        try { localStorage.removeItem('_bgImage'); localStorage.removeItem('_hasCustomBg'); } catch(e) {}
+        // 同步回滚 theme-init.js 可能已应用的 DOM 状态（:root 默认 --bg-image: none）
+        document.documentElement.classList.remove('has-custom-bg');
+        document.documentElement.style.removeProperty('--bg-image');
     }
     
     // 插入到 body 首个子节点之前
@@ -482,16 +529,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 抓取并发守卫（独立状态标志，不依赖按钮 class 这类 UI 状态）
     let bingFetching = false;
 
-    // 最高优先级：立即确认颜色模式，须在 renderShortcuts / loadBgSettings 等耗时操作之前执行
-    const [savedColorMode, savedBgMode] = await Promise.all([
-        Storage.get('colorMode', 'auto').then(sanitizeColorMode),
-        Storage.get('bgMode', 'default').then(sanitizeBgMode)
-    ]);
+    // 最高优先级：复用脚本解析期发起的预读取结果（单次 storage IPC），
+    // 避免首屏关键路径上逐键串行跨进程读配置
+    const earlySettings = await earlySettingsPromise;
+    const savedColorMode = sanitizeColorMode(earlySettings.colorMode);
+    const savedBgMode = sanitizeBgMode(earlySettings.bgMode);
     try { localStorage.setItem('_colorMode', savedColorMode); localStorage.setItem('_bgMode', savedBgMode); } catch(e) {}
     // 运行时颜色模式缓存：避免 applyBackground 等热路径反复跨进程读 storage；
     // 仅在颜色模式按钮点击与数据导入时更新
     let currentColorMode = savedColorMode;
-    await applyColorMode(savedColorMode);
+    // 主题定型不在快捷方式渲染之前 await：自动模式+壁纸时 applyColorMode 会读取并
+    // 解码整张壁纸做亮度检测，阻塞首屏（权威结果由 loadBgSettings → applyBackground
+    // 得出）；无壁纸场景下为轻量路径，同步并发执行无害
+    const colorModeApplied = (savedColorMode === 'auto'
+        && document.documentElement.classList.contains('has-custom-bg'))
+        ? Promise.resolve()
+        : applyColorMode(savedColorMode);
 
     // 数据管理元素
     const exportDataBtn = document.getElementById('export-data-btn');
@@ -660,7 +713,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     ];
     
     let shortcuts = sanitizeShortcuts(
-        parseJsonSafe(await Storage.get('shortcuts', JSON.stringify(DEFAULT_SHORTCUTS)), DEFAULT_SHORTCUTS),
+        parseJsonSafe(earlySettings.shortcuts, DEFAULT_SHORTCUTS),
         DEFAULT_SHORTCUTS
     );
 
@@ -692,14 +745,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    const [rawCols, rawSize, rawScale] = await Promise.all([
-        Storage.get('gridCols', 5),
-        Storage.get('gridSize', 100),
-        Storage.get('scale', 100)
-    ]);
-    const savedCols = clampNumber(rawCols, 3, 10, 5);
-    const savedSize = clampNumber(rawSize, 80, 160, 100);
-    const savedScale = clampNumber(rawScale, 50, 200, 100);
+    // 布局设置已随 earlySettings 预读取，此处直接派生，无额外 storage 等待
+    const savedCols = clampNumber(earlySettings.gridCols, 3, 10, 5);
+    const savedSize = clampNumber(earlySettings.gridSize, 80, 160, 100);
+    const savedScale = clampNumber(earlySettings.scale, 50, 200, 100);
     applyLayoutSettings(savedCols, savedSize, savedScale);
 
     // 优先渲染快捷方式，避免等待背景/主题检测期间网格长时间空白（消除“顿一下才显示”）
@@ -729,6 +778,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 添加类名以隐藏默认的碰撞光球背景层，并停止其动画
             document.documentElement.classList.add('has-custom-bg');
             try { localStorage.setItem('_hasCustomBg', '1'); } catch(e) {}
+            // 同步壁纸镜像：供下个新标签页首帧前由 theme-init.js 同步应用，
+            // 避免每次打开都要等异步存储读取才出背景（大图超过配额则不镜像）
+            let mirrored = false;
+            try { localStorage.setItem('_bgImage', safeBgUrl); mirrored = true; } catch(e) {}
+            if (!mirrored) { try { localStorage.removeItem('_bgImage'); } catch(e2) {} }
             stopBlobAnimation();
             
             // 仅自动模式下检测背景亮度；手动模式是用户显式选择，不被壁纸亮度覆盖
@@ -744,7 +798,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.documentElement.style.setProperty('--bg-image', 'none');
             body.style.backgroundImage = '';
             document.documentElement.classList.remove('has-custom-bg');
-            try { localStorage.removeItem('_hasCustomBg'); } catch(e) {}
+            // 同步清除墙纸镜像与标记，下个新标签页不致残留陈旧背景
+            try { localStorage.removeItem('_hasCustomBg'); localStorage.removeItem('_bgImage'); } catch(e) {}
             restartBlobAnimation();
             
             // 移除背景后重新应用颜色模式（自动模式将恢复跟随系统主题）
@@ -816,6 +871,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         await Storage.setImmediate('bgMode', bgMode);
         try { localStorage.setItem('_bgMode', bgMode); } catch(e) {}
         syncBgModeUI();
+        // loadBgSettings 仅在 custom 模式下读取自定义壁纸，切到该模式时补读预览图
+        if (next === 'custom') {
+            updatePreviews(await Storage.get('customBg'));
+        }
         await applyCurrentBackground();
         // 首次切到必应壁纸模式且尚无缓存时主动拉取，
         // 否则要等到下次打开新标签页才会触发 fetchBing
@@ -827,10 +886,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 加载壁纸设置并应用（初始化与数据导入后调用）
     async function loadBgSettings() {
-        bgMode = sanitizeBgMode(await Storage.get('bgMode', 'default'));
+        // 小值设置一次批量读取（单次跨进程往返）
+        const settingValues = await Storage.getMany(['bgMode', 'bingQuality', 'bingInterval'], {});
+        bgMode = sanitizeBgMode(settingValues.bgMode);
         try { localStorage.setItem('_bgMode', bgMode); } catch(e) {}
-        bingQuality = sanitizeBingQuality(await Storage.get('bingQuality', 'uhd'));
-        bingInterval = sanitizeBingInterval(await Storage.get('bingInterval', DEFAULT_BING_INTERVAL));
+        bingQuality = sanitizeBingQuality(settingValues.bingQuality);
+        bingInterval = sanitizeBingInterval(settingValues.bingInterval);
         bingIntervalSelect.value = String(bingInterval);
         bingQualityButtons.forEach(btn => {
             const active = btn.dataset.bingQuality === bingQuality;
@@ -838,13 +899,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.setAttribute('aria-checked', active ? 'true' : 'false');
         });
         syncBgModeUI();
-        // 一次性读齐两个大体积壁纸项，后续应用/预览直接复用，避免重复跨进程读取
-        const [bingBgValue, customBgValue] = await Promise.all([
-            Storage.get('bingBg'),
-            Storage.get('customBg')
-        ]);
-        await updatePreviews(customBgValue);
-        await applyCurrentBackground({ bing: bingBgValue, custom: customBgValue });
+        // 仅读取当前模式所需要的大体积壁纸（启动首屏关键路径上不把不必要的
+        // 数 MB data URL 反序列化进内存）；切换模式时的读取由 setBgMode 兜底
+        const preloaded = {};
+        let customBgForPreview = null;
+        if (bgMode === 'bing') {
+            preloaded.bing = sanitizeBackgroundValue(await Storage.get('bingBg'));
+        } else if (bgMode === 'custom') {
+            preloaded.custom = sanitizeBackgroundValue(await Storage.get('customBg'));
+            customBgForPreview = preloaded.custom;
+        }
+        await updatePreviews(customBgForPreview);
+        await applyCurrentBackground(preloaded);
     }
 
     // 带超时保护的 sendMessage（防止 Service Worker 无响应时 Promise 永久挂起）
@@ -1066,6 +1132,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     syncDialogTheme();
 
     // --- 壁纸设置初始化 ---
+    // 轻量主题定型结果（无壁纸场景）已在上面并发执行，此处落定后再应用背景
+    await colorModeApplied;
     await loadBgSettings();
     // 必应壁纸模式下，若自动更换已到期（或尚无缓存），后台抓取一张新壁纸
     if (bgMode === 'bing') {

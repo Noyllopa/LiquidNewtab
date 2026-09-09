@@ -17,3 +17,25 @@
         }
     } catch (e) {}
 })();
+
+// 同步应用已缓存的壁纸镜像（_bgImage 由 script.js 的 applyBackground / 启动
+// 预处理权威写入），使首次绘制即为自定义/必应背景，避免先闪现默认底色、
+// 再等 chrome.storage 异步读取（数 MB data URL 反序列化 + 解码）后切换。
+// 校验口径与 script.js 的 sanitizeBackgroundValue 保持一致（data URL 白名单
+// 前缀或 http(s) 链接），防注入。
+(function () {
+    try {
+        var bg = localStorage.getItem('_bgImage');
+        if (bg && (
+            bg.indexOf('data:image/png;base64,') === 0 ||
+            bg.indexOf('data:image/jpeg;base64,') === 0 ||
+            bg.indexOf('data:image/jpg;base64,') === 0 ||
+            bg.indexOf('data:image/webp;base64,') === 0 ||
+            bg.indexOf('https://') === 0 ||
+            bg.indexOf('http://') === 0
+        )) {
+            document.documentElement.style.setProperty('--bg-image', "url('" + bg + "')");
+            document.documentElement.classList.add('has-custom-bg');
+        }
+    } catch (e) {}
+})();
