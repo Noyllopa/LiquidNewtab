@@ -163,7 +163,8 @@
                                 </svg>
                                 <span>上传图标</span>
                             </label>
-                            <input type="file" id="shortcut-icon-upload" accept="image/*,.ico" hidden>
+                            <!-- visually-hidden 而非 hidden：input 保留在 Tab 焦点序内，键盘可达 -->
+                            <input type="file" id="shortcut-icon-upload" accept="image/*,.ico" class="visually-hidden">
                         </div>
                     </div>
                 </div>
@@ -371,7 +372,8 @@
                                     <line x1="12" y1="3" x2="12" y2="15"/>
                                 </svg>
                                 <span>上传图片</span>
-                                <input type="file" id="bg-upload-input" accept="image/*" hidden>
+                                <!-- visually-hidden 而非 hidden：input 保留在 Tab 焦点序内，键盘可达 -->
+                                <input type="file" id="bg-upload-input" accept="image/*" class="visually-hidden">
                             </label>
                             <button id="bg-remove-btn" class="glass-btn compact danger" type="button">
                                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">

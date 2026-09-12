@@ -2335,6 +2335,33 @@ body.light-bg .toast {
 }
 
 /* ------------------------------------------
+   可达性与对话框修正
+   ------------------------------------------ */
+
+/* 搜索框与滑杆：各自的专用样式在通用 input:focus-visible 规则之后以 outline:none
+   清除了焦点环（同优先级、后出者胜），此处按更高优先级补回 */
+.search-capsule input:focus-visible,
+input[type="range"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+/* 文件选择入口（图标上传 / 背景上传）：input 以 visually-hidden 保留在 Tab 焦点序内，
+   input 获得键盘焦点时给对应的 label 触发按钮绘制焦点环 */
+label:has(> input[type="file"]:focus-visible),
+label:has(+ input[type="file"]:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* 矮窗口：编辑对话框整体可滚动，避免保存/取消操作区被视口裁剪而无法保存 */
+#edit-dialog {
+  max-height: calc(100vh - 48px);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* ------------------------------------------
    16. Media Queries
    ------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {

@@ -65,6 +65,7 @@ const MAX_ICON_DATA_URL_CHARS = 750 * 1024;
 const MAX_BACKGROUND_DATA_URL_CHARS = 12 * 1024 * 1024;
 const MAX_EXPORTED_FAVICONS = 80; // 与 background.js 的 MAX_FAVICON_CACHE_ENTRIES 保持一致
 const FAVICON_CONCURRENCY = 4;
+const GLASS_STORAGE_KEY = 'liquidGlassParams'; // 液态玻璃参数存储键（设置 UI / 导入导出 / 跨页同步共用）
 
 // --- 壁纸模式配置 ---
 const BG_MODES = ['default', 'bing', 'custom'];
@@ -121,6 +122,36 @@ function sanitizeIconUrl(value) {
     }
 }
 
+// 稳定 ID：所有编辑 / 删除 / 异步图标写回 / 拖拽排序均按 ID 定位条目，
+// 不再依赖随渲染与重排而过期的数组下标（见拖拽排序后右键误删问题）
+function makeShortcutId() {
+    try {
+        if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+            return crypto.randomUUID();
+        }
+    } catch {}
+    return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+function isValidShortcutId(id) {
+    return typeof id === 'string' && id.length >= 1 && id.length <= 64;
+}
+
+// 为缺少 ID / ID 重复的列表补齐稳定 ID（就地去重），返回是否发生过补写。
+// 补写 ID 后需要由调用方持久化，使多个新标签页共享同一套 ID。
+function ensureShortcutIds(list) {
+    let changed = false;
+    const seen = new Set();
+    for (const item of list) {
+        if (!isValidShortcutId(item.id) || seen.has(item.id)) {
+            item.id = makeShortcutId();
+            changed = true;
+        }
+        seen.add(item.id);
+    }
+    return changed;
+}
+
 function sanitizeShortcut(item) {
     if (!item || typeof item !== 'object') return null;
     const name = typeof item.name === 'string' ? item.name.trim().slice(0, MAX_SHORTCUT_NAME_LENGTH) : '';
@@ -128,6 +159,8 @@ function sanitizeShortcut(item) {
     if (!name || !url) return null;
 
     const sanitized = { name, url };
+    // 保留既有稳定 ID；非法 ID 由 ensureShortcutIds 统一补齐
+    if (isValidShortcutId(item.id)) sanitized.id = item.id;
     const icon = sanitizeIconUrl(item.icon);
     if (icon) sanitized.icon = icon;
     return sanitized;
@@ -142,6 +175,23 @@ function sanitizeShortcuts(value, fallback = []) {
         if (result.length >= MAX_SHORTCUTS) break;
     }
     return result;
+}
+
+// 导入专用：与 sanitizeShortcuts 相同的清洗规则，但额外统计被丢弃的条目数，
+// 供导入确认对话框展示“丢弃原因”，避免静默吞掉用户数据
+function sanitizeShortcutsWithStats(value, fallback = []) {
+    const source = Array.isArray(value) ? value : fallback;
+    const result = [];
+    let dropped = 0;
+    for (const item of source) {
+        const sanitized = sanitizeShortcut(item);
+        if (sanitized && result.length < MAX_SHORTCUTS) {
+            result.push(sanitized);
+        } else {
+            dropped++;
+        }
+    }
+    return { items: result, dropped };
 }
 
 // 主题解析回退链（唯一权威实现）：上次权威计算结果 → 系统偏好。
@@ -218,8 +268,29 @@ function validateImportedData(data) {
         throw new Error('导入文件格式无效');
     }
 
+    // 版本检查：schemaVersion 缺省视为 1（旧版导出）；高于本版本支持的值时拒绝，
+    // 避免未来格式的备份被当前逻辑误读后覆盖现有数据
+    if (data.schemaVersion !== undefined) {
+        const version = Number(data.schemaVersion);
+        if (!Number.isInteger(version) || version < 1 || version > 1) {
+            throw new Error(`不支持的备份版本：${String(data.schemaVersion)}`);
+        }
+    }
+
+    // 字段类型严格区分：shortcuts 存在时必须是数组。
+    // 此前 {"shortcuts":{}} / {"shortcuts":null} 会被静默转换为空列表并覆盖现有数据
+    if (data.shortcuts !== undefined && !Array.isArray(data.shortcuts)) {
+        throw new Error('shortcuts 字段必须为数组');
+    }
+
+    // 导入统计：丢弃原因在确认对话框中展示，不再静默截断
+    const shortcutStats = data.shortcuts === undefined
+        ? { items: undefined, dropped: 0 }
+        : sanitizeShortcutsWithStats(data.shortcuts);
+
     return {
-        shortcuts: data.shortcuts === undefined ? undefined : sanitizeShortcuts(data.shortcuts),
+        shortcuts: shortcutStats.items,
+        droppedShortcuts: shortcutStats.dropped,
         gridCols: data.gridCols === undefined ? undefined : clampNumber(data.gridCols, 3, 10, 5),
         gridSize: data.gridSize === undefined ? undefined : clampNumber(data.gridSize, 80, 160, 100),
         scale: data.scale === undefined ? undefined : clampNumber(data.scale, 50, 200, 100),
@@ -250,9 +321,7 @@ const Storage = (function() {
         writeErrorNotified = true;
         // 5 秒内只提示一次，避免刷屏
         setTimeout(() => { writeErrorNotified = false; }, 5000);
-        try {
-            showToast('数据保存失败，部分设置可能未持久化', 'error');
-        } catch {}
+        console.error('[Storage] 数据写入失败，部分设置可能未持久化');
     }
 
     function flushWrites() {
@@ -267,20 +336,26 @@ const Storage = (function() {
         if (Object.keys(pendingWrites).length > 0) {
             const dataToWrite = { ...pendingWrites };
             pendingWrites = {};
-            return new Promise(resolve => {
+            return new Promise((resolve, reject) => {
                 chrome.storage.local.set(dataToWrite, () => {
                     const lastError = chrome.runtime.lastError;
                     if (lastError) {
                         console.error('Storage write error:', lastError);
                         notifyWriteError();
+                        // 失败契约：写入失败以异常上抛。此前失败被吞成 resolve(false)，
+                        // 调用方只 await 不检查，导致"内存/界面已提交、持久化失败仍显示成功"
+                        const error = new Error('数据写入失败：' + (lastError.message || '未知错误'));
+                        resolveQueue.forEach(resolveItem => resolveItem(error));
+                        reject(error);
+                        return;
                     }
-                    resolveQueue.forEach(resolveItem => resolveItem(!lastError));
-                    resolve(!lastError);
+                    resolveQueue.forEach(resolveItem => resolveItem());
+                    resolve(true);
                 });
             });
         }
 
-        resolveQueue.forEach(resolveItem => resolveItem(true));
+        resolveQueue.forEach(resolveItem => resolveItem());
         return Promise.resolve(true);
     }
 
@@ -288,8 +363,8 @@ const Storage = (function() {
         pendingWrites[key] = value;
         if (writeTimeout) clearTimeout(writeTimeout);
         writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
-        return new Promise(resolve => {
-            flushResolveQueue.push(resolve);
+        return new Promise((resolve, reject) => {
+            flushResolveQueue.push(err => err ? reject(err) : resolve());
         });
     }
 
@@ -310,7 +385,38 @@ const Storage = (function() {
                 });
             });
         },
-        
+
+        // 批量读取：单次跨进程往返替代 get 的逐键 N 次往返，
+        // 用于启动首屏关键路径（首帧前尽快拿到配置，减少串行等待）
+        getMany(keys, defaults = {}) {
+            const keyList = Array.isArray(keys) ? keys : [];
+            const result = {};
+            const missing = [];
+            for (const key of keyList) {
+                // 与 get 语义一致：防抖窗口内优先返回待写入的新值
+                if (Object.prototype.hasOwnProperty.call(pendingWrites, key)) {
+                    result[key] = pendingWrites[key];
+                } else {
+                    missing.push(key);
+                }
+            }
+            if (missing.length === 0) {
+                return Promise.resolve(result);
+            }
+            return new Promise(resolve => {
+                chrome.storage.local.get(missing, res => {
+                    if (chrome.runtime.lastError) {
+                        console.error('Storage read error:', chrome.runtime.lastError);
+                    }
+                    const items = res || {};
+                    for (const key of missing) {
+                        result[key] = key in items ? items[key] : defaults[key];
+                    }
+                    resolve(result);
+                });
+            });
+        },
+
         set(key, value) {
             return scheduleWrite(key, value);
         },
@@ -319,21 +425,43 @@ const Storage = (function() {
             Object.assign(pendingWrites, items);
             if (writeTimeout) clearTimeout(writeTimeout);
             writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
-            return new Promise(resolve => {
-                flushResolveQueue.push(resolve);
+            return new Promise((resolve, reject) => {
+                flushResolveQueue.push(err => err ? reject(err) : resolve());
             });
         },
-        
+
+        // 一次 chrome.storage.local.set 提交多个键：导入的"集中提交"依赖此语义，
+        // 避免逐字段 set 时部分成功、部分失败留下半完成状态
+        setImmediateBatch(items) {
+            for (const key of Object.keys(items)) {
+                delete pendingWrites[key];
+            }
+            return new Promise((resolve, reject) => {
+                chrome.storage.local.set(items, () => {
+                    const lastError = chrome.runtime.lastError;
+                    if (lastError) {
+                        console.error('Storage write error:', lastError);
+                        notifyWriteError();
+                        reject(new Error('数据写入失败：' + (lastError.message || '未知错误')));
+                        return;
+                    }
+                    resolve(true);
+                });
+            });
+        },
+
         setImmediate(key, value) {
             delete pendingWrites[key];
-            return new Promise(resolve => {
+            return new Promise((resolve, reject) => {
                 chrome.storage.local.set({ [key]: value }, () => {
                     const lastError = chrome.runtime.lastError;
                     if (lastError) {
                         console.error('Storage write error:', lastError);
                         notifyWriteError();
+                        reject(new Error('数据写入失败：' + (lastError.message || '未知错误')));
+                        return;
                     }
-                    resolve(!lastError);
+                    resolve(true);
                 });
             });
         },
@@ -345,46 +473,51 @@ const Storage = (function() {
                     delete pendingWrites[item];
                 }
             }
-            return new Promise(resolve => {
+            return new Promise((resolve, reject) => {
                 chrome.storage.local.remove(key, () => {
                     const lastError = chrome.runtime.lastError;
                     if (lastError) {
                         console.error('Storage remove error:', lastError);
                         notifyWriteError();
+                        reject(new Error('数据删除失败：' + (lastError.message || '未知错误')));
+                        return;
                     }
-                    resolve(!lastError);
+                    resolve(true);
                 });
             });
         },
-        
+
         flush() {
             if (Object.keys(pendingWrites).length > 0) {
                 return flushWrites();
             }
-            return Promise.resolve();
+            return Promise.resolve(true);
         }
     };
 })();
 
+// 页面启动关键配置一次性预读取：在脚本解析期即发起存储 IPC，早于首帧绘制；
+// 早启动脚本（theme-init.js 已靠 localStorage 镜像直接出壁纸）与 DOMContentLoaded
+// 初始化共用这份结果，把原来"逐键、多次、串行"的跨进程读取压缩为单次往返
+const EARLY_SETTINGS_KEYS = ['colorMode', 'bgMode', 'gridCols', 'gridSize', 'scale', 'shortcuts'];
+const earlySettingsPromise = Storage.getMany(EARLY_SETTINGS_KEYS, {});
+
 window.addEventListener('beforeunload', () => {
-    Storage.flush();
+    Storage.flush().catch(() => {});
 });
 
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-        Storage.flush();
+        Storage.flush().catch(() => {});
     }
 });
 
 // 在页面加载早期获取并应用背景与颜色模式，避免闪烁
 (async function() {
     // 先读小值配置立即应用主题，须在读取大体积壁纸之前完成，否则阻塞导致"先深后浅"闪烁
-    const [rawBgMode, rawColorMode] = await Promise.all([
-        Storage.get('bgMode', 'default'),
-        Storage.get('colorMode', 'auto')
-    ]);
-    const bgModeValue = sanitizeBgMode(rawBgMode);
-    const colorModeValue = sanitizeColorMode(rawColorMode);
+    const earlySettings = await earlySettingsPromise;
+    const bgModeValue = sanitizeBgMode(earlySettings.bgMode);
+    const colorModeValue = sanitizeColorMode(earlySettings.colorMode);
 
     // 确定主题（与 <head> 防闪脚本逻辑一致）
     let earlyTheme;
@@ -406,7 +539,7 @@ document.addEventListener('visibilitychange', () => {
         document.documentElement.classList.remove('theme-light', 'theme-dark');
     }
     // 不在此处保存 _resolvedTheme：早期值可能不准确，覆写会污染缓存；
-    // 它仅由 applyColorMode / detectBackgroundColor 权威检测后更新
+    // 它仅由 applyColorMode（经 commitResolvedTheme）权威检测后更新
     try {
         localStorage.setItem('_colorMode', colorModeValue);
         localStorage.setItem('_bgMode', bgModeValue);
@@ -437,8 +570,21 @@ document.addEventListener('visibilitychange', () => {
         document.body.style.backgroundImage = `url('${earlyImage}')`;
         document.documentElement.classList.add('has-custom-bg');
         try { localStorage.setItem('_hasCustomBg', '1'); } catch(e) {}
+        // 同步镜像壁纸，供下个新标签页首帧前由 theme-init.js 直接应用（优先走
+        // localStorage：同步读取、无跨进程 IPC，还省去重复解码）
+        try { localStorage.setItem('_bgImage', earlyImage); } catch(e) {
+            // 壁纸超过 localStorage 配额（自定义大图场景）：不镜像，退回异步读取路径
+            try { localStorage.removeItem('_bgImage'); } catch(e2) {}
+        }
+    } else {
+        // 存储中无壁纸但镜像仍残留（如数据导入/重置导致存储已清空，或旧版本
+        // 页面写入的镜像）：撤销首帧镜像，避免陈旧壁纸残留到本页与后续页面
+        try { localStorage.removeItem('_bgImage'); localStorage.removeItem('_hasCustomBg'); } catch(e) {}
+        // 同步回滚 theme-init.js 可能已应用的 DOM 状态（:root 默认 --bg-image: none）
+        document.documentElement.classList.remove('has-custom-bg');
+        document.documentElement.style.removeProperty('--bg-image');
     }
-    
+
     // 插入到 body 首个子节点之前
     if (document.body) {
         if (document.body.firstChild) {
@@ -479,19 +625,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     let bingAbortController = null;
     // 画质切换时有抓取进行中而被迫跳过：登记后待其结束自动按新画质补一次抓取
     let bingRefetchPending = false;
-    // 抓取并发守卫（独立状态标志，不依赖按钮 class 这类 UI 状态）
-    let bingFetching = false;
+    // 抓取并发去重：锁在首次调用时同步占用（若在首个 await 之后才上锁，
+    // 两次调用会同时通过检查并互相踩踏操作令牌）；并发调用共享同一 Promise
+    let bingFetchPromise = null;
+    // 主题请求令牌：applyColorMode 每次调用递增（声明须先于初始化期间的
+    // applyColorMode 调用，否则运行时处于暂时性死区）
+    let themeRequestToken = 0;
 
-    // 最高优先级：立即确认颜色模式，须在 renderShortcuts / loadBgSettings 等耗时操作之前执行
-    const [savedColorMode, savedBgMode] = await Promise.all([
-        Storage.get('colorMode', 'auto').then(sanitizeColorMode),
-        Storage.get('bgMode', 'default').then(sanitizeBgMode)
-    ]);
+    // 最高优先级：复用脚本解析期发起的预读取结果（单次 storage IPC），
+    // 避免首屏关键路径上逐键串行跨进程读配置
+    const earlySettings = await earlySettingsPromise;
+    const savedColorMode = sanitizeColorMode(earlySettings.colorMode);
+    const savedBgMode = sanitizeBgMode(earlySettings.bgMode);
     try { localStorage.setItem('_colorMode', savedColorMode); localStorage.setItem('_bgMode', savedBgMode); } catch(e) {}
     // 运行时颜色模式缓存：避免 applyBackground 等热路径反复跨进程读 storage；
     // 仅在颜色模式按钮点击与数据导入时更新
     let currentColorMode = savedColorMode;
-    await applyColorMode(savedColorMode);
+    // 主题定型不在快捷方式渲染之前 await：自动模式+壁纸时 applyColorMode 会读取并
+    // 解码整张壁纸做亮度检测，阻塞首屏（权威结果由 loadBgSettings → applyBackground
+    // 得出）；无壁纸场景下为轻量路径，同步并发执行无害
+    const colorModeApplied = (savedColorMode === 'auto'
+        && document.documentElement.classList.contains('has-custom-bg'))
+        ? Promise.resolve()
+        : applyColorMode(savedColorMode);
 
     // 数据管理元素
     const exportDataBtn = document.getElementById('export-data-btn');
@@ -641,13 +797,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     let iconPreviewFallback = null;
     const saveBtn = document.getElementById('save-btn');
     const cancelBtn = document.getElementById('cancel-btn');
-    let isEditing = false, editIndex = -1;
+    // 编辑会话令牌：每次打开对话框 / 关闭对话框时递增。提交后异步等待（远程图标
+    // 下载等）返回时校验令牌，取消或切换目标都会使旧流程失效——防止旧编辑会话
+    // 把条目 A 的内容写入用户随后打开的条目 B
+    let editSession = 0;
+    // 当前编辑目标的稳定 ID；null 表示新建
+    let editTargetId = null;
 
     // 右键菜单元素
     const contextMenu = document.getElementById('context-menu');
     const menuEdit = document.getElementById('menu-edit');
     const menuDelete = document.getElementById('menu-delete');
-    let contextMenuIndex = -1;
+    // 右键菜单目标条目的稳定 ID（替代易过期的数组下标）
+    let contextMenuId = null;
 
     const settingsTabs = document.querySelectorAll('[data-settings-tab]');
     const settingsPanels = document.querySelectorAll('[data-settings-panel]');
@@ -660,12 +822,177 @@ document.addEventListener('DOMContentLoaded', async () => {
     ];
     
     let shortcuts = sanitizeShortcuts(
-        parseJsonSafe(await Storage.get('shortcuts', JSON.stringify(DEFAULT_SHORTCUTS)), DEFAULT_SHORTCUTS),
+        parseJsonSafe(earlySettings.shortcuts, DEFAULT_SHORTCUTS),
         DEFAULT_SHORTCUTS
     );
 
+    // 兼容旧数据迁移：为缺少稳定 ID 的既有条目补齐并立即持久化，
+    // 使多个新标签页共用同一套 ID（否则各页随机生成的 ID 会互相冲突）
+    try {
+        const storedRawForMigration = earlySettings.shortcuts;
+        if (storedRawForMigration != null) {
+            const parsedForMigration = parseJsonSafe(storedRawForMigration, null);
+            if (Array.isArray(parsedForMigration) &&
+                parsedForMigration.some(s => !s || typeof s !== 'object' || !isValidShortcutId(s.id))) {
+                ensureShortcutIds(shortcuts);
+                Storage.setImmediate('shortcuts', JSON.stringify(shortcuts)).catch(() => {});
+            }
+        }
+    } catch {}
+
+    // --- 快捷方式数据层：稳定 ID + 后台串行化修改（多标签页一致性） ---
+    // 所有修改经由后台 Service Worker 串行执行（见 mutateShortcuts），
+    // 避免多标签页各自持有旧快照、整数组写回互相覆盖（最后写入者获胜丢数据）
+    const SHORTCUTS_VERSION_KEY = '_shortcutsVersion';
+    // 本页刚写出的 shortcuts JSON：storage.onChanged 回声到达时识别"自己写的"，
+    // 避免把自己的写入当作远端修改重复采纳
+    const pendingEchoShortcuts = new Set();
+    // 设置类键的跨页同步在初始化完成后才启用（loadBgSettings 等依赖的运行时状态
+    // 在初始化过程中尚未就绪）；shortcuts 的采纳不受此限制（依赖均已就绪）
+    let settingsSyncReady = false;
+    // 页内修改串行化：同一页的多次修改排队执行，避免交错读写版本号
+    let shortcutsMutationQueue = Promise.resolve();
+
+    function parseStoredShortcuts(raw) {
+        if (raw == null) return sanitizeShortcuts(DEFAULT_SHORTCUTS, DEFAULT_SHORTCUTS);
+        const parsed = parseJsonSafe(raw, null);
+        if (!Array.isArray(parsed)) return sanitizeShortcuts(DEFAULT_SHORTCUTS, DEFAULT_SHORTCUTS);
+        return sanitizeShortcuts(parsed, []);
+    }
+
+    // 统一的快捷方式修改入口：所有修改以 op 描述符发往后台 Service Worker，
+    // 由后台在单一 Promise 队列内串行执行"读取最新列表 → 应用 → 写回"。
+    // 多标签页 / 多操作不再各自持有旧快照做整数组写回，从结构上消除
+    // 最后写入者获胜的数据丢失（chrome.storage 无原子 CAS，页内自旋重试不可靠）。
+    // 成功后以后台写回的确切 JSON 登记回声并更新本页镜像。
+    function mutateShortcuts(op) {
+        const run = async () => {
+            const response = await sendMessageWithTimeout({ action: 'shortcutOp', op }, 15000);
+            if (!response || response.success !== true) {
+                throw new Error((response && response.error) || '快捷方式保存失败');
+            }
+            const json = typeof response.shortcutsJson === 'string'
+                ? response.shortcutsJson
+                : JSON.stringify(response.shortcuts || []);
+            const parsed = parseJsonSafe(json, null);
+            const list = Array.isArray(parsed) ? sanitizeShortcuts(parsed, []) : [];
+            ensureShortcutIds(list);
+            pendingEchoShortcuts.add(json);
+            shortcuts = list;
+            return list;
+        };
+        const result = shortcutsMutationQueue.then(run, run);
+        shortcutsMutationQueue = result.then(() => {}, () => {});
+        return result;
+    }
+
+    // 远端（其他标签页）写入的 shortcuts：采纳并重渲染
+    function adoptRemoteShortcuts(json) {
+        if (pendingEchoShortcuts.has(json)) {
+            pendingEchoShortcuts.delete(json);
+            return;
+        }
+        const parsed = parseJsonSafe(json, null);
+        if (!Array.isArray(parsed)) return;
+        const list = sanitizeShortcuts(parsed, []);
+        ensureShortcutIds(list);
+        shortcuts = list;
+        if (!currentDragElement) renderShortcuts();
+    }
+
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local') return;
+        if (changes.shortcuts && typeof changes.shortcuts.newValue === 'string') {
+            adoptRemoteShortcuts(changes.shortcuts.newValue);
+        }
+        if (!settingsSyncReady) return;
+        // 设置类键的跨页同步：另一页修改了布局 / 颜色 / 背景时跟随更新
+        const settingKeys = ['gridCols', 'gridSize', 'scale', 'colorMode', 'bgMode',
+            'bingQuality', 'bingInterval', 'bingBg', 'customBg', GLASS_STORAGE_KEY];
+        if (!settingKeys.some(k => Object.prototype.hasOwnProperty.call(changes, k))) return;
+        (async () => {
+            try {
+                if ('gridCols' in changes || 'gridSize' in changes || 'scale' in changes) {
+                    const [cols, size, scale] = await Promise.all([
+                        Storage.get('gridCols', 5), Storage.get('gridSize', 100), Storage.get('scale', 100)
+                    ]);
+                    applyLayoutSettings(cols, size, scale);
+                    colInput.value = clampNumber(cols, 3, 10, 5);
+                    colValDisplay.innerText = colInput.value;
+                    sizeInput.value = clampNumber(size, 80, 160, 100);
+                    scaleInput.value = clampNumber(scale, 50, 200, 100);
+                    scaleValDisplay.innerText = scaleInput.value + '%';
+                }
+                if ('colorMode' in changes) {
+                    const mode = sanitizeColorMode(changes.colorMode.newValue);
+                    currentColorMode = mode;
+                    colorModeButtons.forEach(btn => {
+                        const active = btn.dataset.mode === mode;
+                        btn.classList.toggle('active', active);
+                        btn.setAttribute('aria-checked', active ? 'true' : 'false');
+                    });
+                    try { localStorage.setItem('_colorMode', mode); } catch (e) {}
+                    await applyColorMode(mode);
+                }
+                if ('bgMode' in changes || 'bingBg' in changes || 'customBg' in changes ||
+                    'bingQuality' in changes || 'bingInterval' in changes) {
+                    await loadBgSettings();
+                }
+                if (Object.prototype.hasOwnProperty.call(changes, GLASS_STORAGE_KEY) && window.LiquidGlass) {
+                    window.LiquidGlass.applySettings(changes[GLASS_STORAGE_KEY].newValue);
+                    window.dispatchEvent(new CustomEvent('liquidglass:settingschange'));
+                }
+            } catch (e) {
+                console.debug('[sync] 应用其他标签页的设置变更失败:', e);
+            }
+        })();
+    });
+
     // 渲染中止控制（提前声明，供早期渲染使用）
     let shortcutsAbortController = new AbortController();
+
+    // 历史遗留的远程 URL 图标迁移为 data URL 的共享状态（跨渲染保持）：
+    // - remoteIconFetches：按 URL 去重进行中的下载，避免并发渲染重复请求
+    // - failedRemoteIcons：会话内已确认无法固化的 URL，渲染阶段直接跳过，避免每次打开新标签页都重试
+    // 注意：必须声明在首次 renderShortcuts() 之前——早渲染会对含远程图标 URL 的条目
+    // 调用 persistRemoteIcon，若声明位置靠后（初始化流程尾部）会触发 TDZ ReferenceError
+    const remoteIconFetches = new Map();
+    const failedRemoteIcons = new Set();
+
+    // 远程 URL 图标一次性固化为 data URL：成功后更新磁贴并写入存储，
+    // 之后每次渲染直接使用本地 data URL，不再请求远程资源。
+    // 按 ID 定位条目并在写入前校验图标未被改动，固化期间的重排/编辑不会错写到其他条目
+    async function persistRemoteIcon(id, url, imgElement, signal) {
+        if (failedRemoteIcons.has(url)) return;
+
+        let task = remoteIconFetches.get(url);
+        if (!task) {
+            task = fetchIconDataUrl(url).then(dataUrl => ({ dataUrl }));
+            remoteIconFetches.set(url, task);
+            try {
+                await task;
+            } finally {
+                remoteIconFetches.delete(url);
+            }
+        }
+        const { dataUrl } = await task;
+        if (!dataUrl) {
+            // 会话内负缓存：已确认无法固化的 URL 不再于每次渲染时重试
+            failedRemoteIcons.add(url);
+            return;
+        }
+        if (signal && signal.aborted) return;
+
+        failedRemoteIcons.delete(url);
+        if (imgElement.isConnected) imgElement.src = dataUrl;
+        try {
+            // 按稳定 ID 定位且要求当前图标仍是发起下载时的 URL：
+            // 固化期间的重排/编辑/删除都不会把图标写到别的条目
+            await mutateShortcuts({ type: 'setIcon', id, expectUrl: url, iconUrl: dataUrl });
+        } catch (e) {
+            console.debug('[icon] 固化远程图标写入失败:', url, e);
+        }
+    }
 
     function getResponsiveColCount(cols, itemSize) {
         const gap = 20;
@@ -692,14 +1019,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    const [rawCols, rawSize, rawScale] = await Promise.all([
-        Storage.get('gridCols', 5),
-        Storage.get('gridSize', 100),
-        Storage.get('scale', 100)
-    ]);
-    const savedCols = clampNumber(rawCols, 3, 10, 5);
-    const savedSize = clampNumber(rawSize, 80, 160, 100);
-    const savedScale = clampNumber(rawScale, 50, 200, 100);
+    // 布局设置已随 earlySettings 预读取，此处直接派生，无额外 storage 等待
+    const savedCols = clampNumber(earlySettings.gridCols, 3, 10, 5);
+    const savedSize = clampNumber(earlySettings.gridSize, 80, 160, 100);
+    const savedScale = clampNumber(earlySettings.scale, 50, 200, 100);
     applyLayoutSettings(savedCols, savedSize, savedScale);
 
     // 优先渲染快捷方式，避免等待背景/主题检测期间网格长时间空白（消除“顿一下才显示”）
@@ -729,11 +1052,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 添加类名以隐藏默认的碰撞光球背景层，并停止其动画
             document.documentElement.classList.add('has-custom-bg');
             try { localStorage.setItem('_hasCustomBg', '1'); } catch(e) {}
+            // 同步壁纸镜像：供下个新标签页首帧前由 theme-init.js 同步应用，
+            // 避免每次打开都要等异步存储读取才出背景（大图超过配额则不镜像）
+            let mirrored = false;
+            try { localStorage.setItem('_bgImage', safeBgUrl); mirrored = true; } catch(e) {}
+            if (!mirrored) { try { localStorage.removeItem('_bgImage'); } catch(e2) {} }
             stopBlobAnimation();
             
-            // 仅自动模式下检测背景亮度；手动模式是用户显式选择，不被壁纸亮度覆盖
+            // 仅自动模式下检测背景亮度；手动模式是用户显式选择，不被壁纸亮度覆盖。
+            // 统一经 applyColorMode 提交（带请求令牌校验），检测函数本身不再直接改 DOM
             if (currentColorMode === 'auto') {
-                await detectBackgroundColor(safeBgUrl);
+                await applyColorMode('auto', safeBgUrl);
             }
         } else {
             // 移除背景图片
@@ -744,7 +1073,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.documentElement.style.setProperty('--bg-image', 'none');
             body.style.backgroundImage = '';
             document.documentElement.classList.remove('has-custom-bg');
-            try { localStorage.removeItem('_hasCustomBg'); } catch(e) {}
+            // 同步清除墙纸镜像与标记，下个新标签页不致残留陈旧背景
+            try { localStorage.removeItem('_hasCustomBg'); localStorage.removeItem('_bgImage'); } catch(e) {}
             restartBlobAnimation();
             
             // 移除背景后重新应用颜色模式（自动模式将恢复跟随系统主题）
@@ -812,10 +1142,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             bingAbortController.abort();
             bingAbortController = null;
         }
+        // 先持久化、成功后再切换运行时状态；失败时保持旧模式并提示
+        try {
+            await Storage.setImmediate('bgMode', next);
+        } catch (err) {
+            showError('背景模式保存失败，请重试', err);
+            return;
+        }
         bgMode = next;
-        await Storage.setImmediate('bgMode', bgMode);
         try { localStorage.setItem('_bgMode', bgMode); } catch(e) {}
         syncBgModeUI();
+        // loadBgSettings 仅在 custom 模式下读取自定义壁纸，切到该模式时补读预览图
+        if (next === 'custom') {
+            updatePreviews(await Storage.get('customBg'));
+        }
         await applyCurrentBackground();
         // 首次切到必应壁纸模式且尚无缓存时主动拉取，
         // 否则要等到下次打开新标签页才会触发 fetchBing
@@ -827,10 +1167,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 加载壁纸设置并应用（初始化与数据导入后调用）
     async function loadBgSettings() {
-        bgMode = sanitizeBgMode(await Storage.get('bgMode', 'default'));
+        // 小值设置一次批量读取（单次跨进程往返）
+        const settingValues = await Storage.getMany(['bgMode', 'bingQuality', 'bingInterval'], {});
+        bgMode = sanitizeBgMode(settingValues.bgMode);
         try { localStorage.setItem('_bgMode', bgMode); } catch(e) {}
-        bingQuality = sanitizeBingQuality(await Storage.get('bingQuality', 'uhd'));
-        bingInterval = sanitizeBingInterval(await Storage.get('bingInterval', DEFAULT_BING_INTERVAL));
+        bingQuality = sanitizeBingQuality(settingValues.bingQuality);
+        bingInterval = sanitizeBingInterval(settingValues.bingInterval);
         bingIntervalSelect.value = String(bingInterval);
         bingQualityButtons.forEach(btn => {
             const active = btn.dataset.bingQuality === bingQuality;
@@ -838,13 +1180,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.setAttribute('aria-checked', active ? 'true' : 'false');
         });
         syncBgModeUI();
-        // 一次性读齐两个大体积壁纸项，后续应用/预览直接复用，避免重复跨进程读取
-        const [bingBgValue, customBgValue] = await Promise.all([
-            Storage.get('bingBg'),
-            Storage.get('customBg')
-        ]);
-        await updatePreviews(customBgValue);
-        await applyCurrentBackground({ bing: bingBgValue, custom: customBgValue });
+        // 仅读取当前模式所需要的大体积壁纸（启动首屏关键路径上不把不必要的
+        // 数 MB data URL 反序列化进内存）；切换模式时的读取由 setBgMode 兜底
+        const preloaded = {};
+        let customBgForPreview = null;
+        if (bgMode === 'bing') {
+            preloaded.bing = sanitizeBackgroundValue(await Storage.get('bingBg'));
+        } else if (bgMode === 'custom') {
+            preloaded.custom = sanitizeBackgroundValue(await Storage.get('customBg'));
+            customBgForPreview = preloaded.custom;
+        }
+        await updatePreviews(customBgForPreview);
+        await applyCurrentBackground(preloaded);
     }
 
     // 带超时保护的 sendMessage（防止 Service Worker 无响应时 Promise 永久挂起）
@@ -970,10 +1317,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // 获取必应壁纸；force=true 忽略间隔强制获取（换一张、切换画质时用）
-    async function fetchBing(force = false) {
-        if (bingFetching) return;
+    // 获取必应壁纸；force=true 忽略间隔强制获取（换一张、切换画质时用）。
+    // 并发调用共享同一 Promise（去重），锁在进入函数时同步占用
+    function fetchBing(force = false) {
+        if (bingFetchPromise) return bingFetchPromise;
+        bingFetchPromise = runBingFetch(force);
+        return bingFetchPromise;
+    }
 
+    async function runBingFetch(force = false) {
         const now = Date.now();
         const lastFetch = Number(await Storage.get('bingLastFetch', 0)) || 0;
         // 未到期且已有缓存时直接沿用缓存，不重复抓取
@@ -982,7 +1334,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (cached) return;
         }
 
-        bingFetching = true;
         bingRefreshBtn.classList.add('loading');
         bingRefreshBtn.disabled = true;
         const myToken = ++bgActionToken;
@@ -1013,16 +1364,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.error('[BingWallpaper]', error);
         } finally {
             if (bingAbortController === controller) bingAbortController = null;
-            bingFetching = false;
             bingRefreshBtn.classList.remove('loading');
             bingRefreshBtn.disabled = false;
-            // 抓取期间用户切换过画质：仍处于必应壁纸模式时按最新画质补一次抓取
-            if (bingRefetchPending && bgMode === 'bing') {
-                bingRefetchPending = false;
-                fetchBing(true);
-            } else {
-                bingRefetchPending = false;
-            }
+            // 抓取期间用户切换过画质：仍处于必应壁纸模式时按最新画质补一次抓取。
+            // 先释放并发锁再触发补抓，否则补抓会被去重逻辑误拦截
+            const shouldRefetch = bingRefetchPending && bgMode === 'bing' && myToken === bgActionToken;
+            bingRefetchPending = false;
+            bingFetchPromise = null;
+            if (shouldRefetch) fetchBing(true);
         }
     }
 
@@ -1033,12 +1382,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     scaleInput.value = savedScale;
     scaleValDisplay.innerText = savedScale + '%';
     
-    // 初始化颜色模式设置（savedColorMode 已在最前方读取并应用）
-    const initialColorBtn = document.querySelector(`.color-mode-buttons .glass-btn[data-mode="${savedColorMode}"]`);
-    if (initialColorBtn) {
-        initialColorBtn.classList.add('active');
-        initialColorBtn.setAttribute('aria-checked', 'true');
-    }
+    // 初始化颜色模式设置（savedColorMode 已在最前方读取并应用）。
+    // 全量同步选中态：HTML 中预置在"自动"按钮上的 active 必须先清除，
+    // 否则已存手动模式（如深色）与"自动"会同时处于选中状态
+    colorModeButtons.forEach(btn => {
+        const active = btn.dataset.mode === savedColorMode;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-checked', active ? 'true' : 'false');
+    });
 
     // 监听系统主题变化
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -1053,19 +1404,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
     
-    // 确保自动模式下按钮有高亮显示
-    if (savedColorMode === 'auto') {
-        const autoButton = document.querySelector(`.color-mode-buttons .glass-btn[data-mode="auto"]`);
-        if (autoButton && !autoButton.classList.contains('active')) {
-            autoButton.classList.add('active');
-            autoButton.setAttribute('aria-checked', 'true');
-        }
-    }
-    
     // 对话框极性与页面解析主题对齐（body 类尚未就绪时回退 _resolvedTheme 缓存）
     syncDialogTheme();
 
     // --- 壁纸设置初始化 ---
+    // 轻量主题定型结果（无壁纸场景）已在上面并发执行，此处落定后再应用背景
+    await colorModeApplied;
     await loadBgSettings();
     // 必应壁纸模式下，若自动更换已到期（或尚无缓存），后台抓取一张新壁纸
     if (bgMode === 'bing') {
@@ -1132,20 +1476,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         colValDisplay.innerText = e.target.value;
         e.target.setAttribute('aria-valuenow', e.target.value);
         applyLayoutSettings(e.target.value, sizeInput.value, scaleInput.value);
-        await Storage.set('gridCols', e.target.value);
+        Storage.set('gridCols', e.target.value).catch(err => showError('布局设置保存失败', err));
     });
-    
+
     sizeInput.addEventListener('input', async (e) => {
         e.target.setAttribute('aria-valuenow', e.target.value);
         applyLayoutSettings(colInput.value, e.target.value, scaleInput.value);
-        await Storage.set('gridSize', e.target.value);
+        Storage.set('gridSize', e.target.value).catch(err => showError('布局设置保存失败', err));
     });
-    
+
     scaleInput.addEventListener('input', async (e) => {
         scaleValDisplay.innerText = e.target.value + '%';
         e.target.setAttribute('aria-valuenow', e.target.value);
         applyLayoutSettings(colInput.value, sizeInput.value, e.target.value);
-        await Storage.set('scale', e.target.value);
+        Storage.set('scale', e.target.value).catch(err => showError('布局设置保存失败', err));
     });
 
     let layoutResizeTimer;
@@ -1159,24 +1503,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 颜色模式设置监听
     colorModeButtons.forEach(button => {
         button.addEventListener('click', async (e) => {
-            // 移除所有按钮的激活状态
-            colorModeButtons.forEach(btn => {
-                btn.classList.remove('active');
-                btn.setAttribute('aria-checked', 'false');
-            });
-            
-            // 为当前点击的按钮添加激活状态
-            button.classList.add('active');
-            button.setAttribute('aria-checked', 'true');
-            
             // 获取模式值
             const mode = sanitizeColorMode(button.dataset.mode);
-            
-            // 保存设置
+
+            // 保存设置：UI 优先即时反馈，持久化失败时以错误提示告知
+            // （乐观更新：本地已应用，仅持久化可能延迟失败）
             currentColorMode = mode;
-            await Storage.set('colorMode', mode);
+            Storage.set('colorMode', mode).catch(err => showError('颜色模式保存失败', err));
             try { localStorage.setItem('_colorMode', mode); } catch(e) {}
-            
+
+            // 移除所有按钮的激活状态，再为当前点击的按钮添加激活状态
+            colorModeButtons.forEach(btn => {
+                btn.classList.toggle('active', btn === button);
+                btn.setAttribute('aria-checked', btn === button ? 'true' : 'false');
+            });
+
             // 应用新的颜色模式（auto 会按背景亮度/系统偏好重新计算）
             await applyColorMode(mode);
         });
@@ -1196,7 +1537,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // --- 液态玻璃参数设置（外观入口 + 右侧实时调参面板） ---
-    const GLASS_STORAGE_KEY = 'liquidGlassParams';
     const glassControlsHost = document.getElementById('glass-controls');
     const glassResetBtn = document.getElementById('glass-reset-btn');
     const glassTuneBtn = document.getElementById('glass-tune-btn');
@@ -1225,7 +1565,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
 
         const applyAndPersistGlass = () => {
-            Storage.set(GLASS_STORAGE_KEY, glassState);
+            Storage.set(GLASS_STORAGE_KEY, glassState)
+                .catch(err => showError('玻璃参数保存失败', err));
             window.LiquidGlass.applySettings(glassState);
         };
 
@@ -1345,6 +1686,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function handleSaveShortcut(e) {
         if (e) e.preventDefault();
         if (savingShortcut) return;
+        // 提交时固定会话令牌与目标 ID：等待远程图标期间用户取消或打开其他条目时，
+        // 旧保存流程在令牌校验处终止，不会把旧字段写入新目标
+        const session = editSession;
+        const targetId = editTargetId;
         const name = nameInput.value.trim();
         const finalUrl = normalizeHttpUrl(urlInput.value);
         const rawIcon = iconInput.value.trim();
@@ -1360,43 +1705,38 @@ document.addEventListener('DOMContentLoaded', async () => {
         savingShortcut = true;
         saveBtn.disabled = true;
         try {
-        if (icon && (icon.startsWith('http:') || icon.startsWith('https:'))) {
-            const persistedIcon = await fetchIconDataUrl(icon);
-            if (persistedIcon) {
-                icon = persistedIcon;
-            } else {
-                showToast('远程图标下载失败，已保留原 URL', 'error', 4000);
-            }
-        }
-
-        // 数量上限校验：超出上限的新增项会在渲染时被静默截断，必须在此拦截
-        if (!isEditing && shortcuts.length >= MAX_SHORTCUTS) {
-            showError(`快捷方式数量已达上限（${MAX_SHORTCUTS} 个）`);
-            return;
-        }
-
-        if (name && finalUrl) {
-            if (isEditing) {
-                shortcuts[editIndex] = { name: name.slice(0, MAX_SHORTCUT_NAME_LENGTH), url: finalUrl };
-                if (icon) {
-                    shortcuts[editIndex].icon = icon;
+            if (icon && (icon.startsWith('http:') || icon.startsWith('https:'))) {
+                const persistedIcon = await fetchIconDataUrl(icon);
+                // 下载期间会话已失效（取消 / 关闭 / 打开了其他条目）：立即终止
+                if (session !== editSession) return;
+                if (persistedIcon) {
+                    icon = persistedIcon;
                 } else {
-                    delete shortcuts[editIndex].icon;
+                    showToast('远程图标下载失败，已保留原 URL', 'error', 4000);
                 }
-                await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
-                await renderShortcuts();
-            } else {
-                const newItem = { name: name.slice(0, MAX_SHORTCUT_NAME_LENGTH), url: finalUrl };
-                if (icon) newItem.icon = icon;
-                shortcuts.push(newItem);
-                await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
-                await renderShortcuts(); 
             }
-            
+
+            if (!name || !finalUrl) {
+                showError('请输入有效的名称和网址');
+                return;
+            }
+
+            const fields = { name: name.slice(0, MAX_SHORTCUT_NAME_LENGTH), url: finalUrl };
+            if (icon) fields.icon = icon;
+
+            // 先持久化、成功后再提交界面状态（渲染 + 关闭对话框）；
+            // 写入失败保持对话框打开并提示，不再出现"显示成功但未保存"
+            if (targetId !== null) {
+                await mutateShortcuts({ type: 'update', id: targetId, fields });
+            } else {
+                // 数量上限校验由后台在串行队列内基于最新列表执行，避免并发新增绕过上限
+                await mutateShortcuts({ type: 'add', item: { id: makeShortcutId(), ...fields } });
+            }
+
+            await renderShortcuts();
             editDialog.close();
-        } else {
-            showError('请输入有效的名称和网址');
-        }
+        } catch (err) {
+            showError(err && err.message ? err.message : '保存失败，请重试', err);
         } finally {
             savingShortcut = false;
             saveBtn.disabled = false;
@@ -1457,6 +1797,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         editForm.addEventListener('submit', handleSaveShortcut);
     }
     cancelBtn.addEventListener('click', () => editDialog.close());
+    // 关闭对话框即失效当前编辑会话：取消、Esc 或点击遮罩关闭后，
+    // 仍在进行的旧保存流程（如远程图标下载）在令牌校验处终止
+    editDialog.addEventListener('close', () => {
+        editSession++;
+        editTargetId = null;
+    });
     iconInput.addEventListener('input', updateIconPreview);
     // 预览图加载失败时回退到占位状态（src 被清空时不触发，避免误报）
     iconPreviewImg.addEventListener('error', () => {
@@ -1528,16 +1874,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         btn.addEventListener('click', async () => {
             const quality = sanitizeBingQuality(btn.dataset.bingQuality);
             if (quality === bingQuality) return;
+            try {
+                await Storage.setImmediate('bingQuality', quality);
+            } catch (err) {
+                showError('画质保存失败，请重试', err);
+                return;
+            }
             bingQuality = quality;
-            await Storage.setImmediate('bingQuality', bingQuality);
             bingQualityButtons.forEach(b => {
                 const active = b.dataset.bingQuality === bingQuality;
                 b.classList.toggle('active', active);
                 b.setAttribute('aria-checked', active ? 'true' : 'false');
             });
             // 切换画质后立即按新画质重新获取壁纸；
-            // 若已有抓取进行中（fetchBing 的并发守卫会跳过），登记后由其 finally 补抓
-            if (bingFetching) {
+            // 若已有抓取进行中（并发去重会跳过），登记后由其 finally 补抓
+            if (bingFetchPromise) {
                 bingRefetchPending = true;
                 return;
             }
@@ -1547,9 +1898,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // [壁纸功能 4] 必应壁纸自动更换间隔
     bingIntervalSelect.addEventListener('change', async () => {
-        bingInterval = sanitizeBingInterval(bingIntervalSelect.value);
+        const interval = sanitizeBingInterval(bingIntervalSelect.value);
+        try {
+            await Storage.setImmediate('bingInterval', interval);
+        } catch (err) {
+            showError('自动更换间隔保存失败，请重试', err);
+            bingIntervalSelect.value = String(bingInterval); // 恢复为已保存的值
+            return;
+        }
+        bingInterval = interval;
         bingIntervalSelect.value = String(bingInterval);
-        await Storage.setImmediate('bingInterval', bingInterval);
     });
 
     // [壁纸功能 5] 上传本地图片 (转 Base64 存储)
@@ -1557,8 +1915,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const file = e.target.files[0];
         if (!file) return;
 
-        // 用户上传背景：递增令牌并中止正在进行的必应壁纸获取，避免其完成后覆盖
-        ++bgActionToken;
+        // 用户上传背景：递增令牌并中止正在进行的必应壁纸获取，避免其完成后覆盖。
+        // 本次上传持有令牌快照：压缩期间用户移除/再次上传会使旧压缩结果失效，
+        // 不会把过期的图片写回存储
+        const myBgToken = ++bgActionToken;
         if (bingAbortController) {
             bingAbortController.abort();
             bingAbortController = null;
@@ -1585,11 +1945,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             const base64String = event.target.result;
             try {
                 const compressedImage = await compressImage(base64String, 0.7);
+                // 压缩期间用户移除/再次上传背景：本次结果作废，不再写回
+                if (myBgToken !== bgActionToken) return;
                 if (!isImageDataUrl(compressedImage, MAX_BACKGROUND_DATA_URL_CHARS)) {
                     showError('压缩后的图片仍然过大，请选择更小的图片');
                     return;
                 }
                 await Storage.setImmediate('customBg', compressedImage);
+                if (myBgToken !== bgActionToken) return;
                 await updatePreviews(compressedImage);
                 // 仅自定义模式下立即应用，避免覆盖其他模式的背景
                 if (bgMode === 'custom') await applyBackground(compressedImage);
@@ -1609,13 +1972,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         if (!window.confirm('确定移除已上传的图片？')) return;
-        // 递增令牌并中止正在进行的必应壁纸获取
+        // 递增令牌并中止正在进行的必应壁纸获取（同时使进行中的上传写回失效）
         ++bgActionToken;
         if (bingAbortController) {
             bingAbortController.abort();
             bingAbortController = null;
         }
-        await Storage.remove('customBg');
+        try {
+            await Storage.remove('customBg');
+        } catch (err) {
+            showError('移除失败，请重试', err);
+            return;
+        }
         await updatePreviews(null);
         if (bgMode === 'custom') await applyBackground(null);
         showToast('图片已移除', 'success');
@@ -1624,7 +1992,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 数据导出功能
     exportDataBtn.addEventListener('click', async () => {
         // 并行读取，避免大体积壁纸项串行等待
-        const [gridCols, gridSize, scale, customBg, bgMode, bingQuality, bingInterval, bingLastFetch, bingBg, colorMode, glassParams] = await Promise.all([
+        const [gridCols, gridSize, scale, customBg, bgMode, bingQuality, bingInterval, bingLastFetch, bingBg, colorMode, glassParams, storedShortcutsRaw] = await Promise.all([
             Storage.get('gridCols', 5),
             Storage.get('gridSize', 100),
             Storage.get('scale', 100), // 显示比例设置
@@ -1635,10 +2003,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             Storage.get('bingLastFetch', 0),
             Storage.get('bingBg'),
             Storage.get('colorMode', 'auto'), // 颜色模式设置
-            Storage.get(GLASS_STORAGE_KEY) // 液态玻璃参数
+            Storage.get(GLASS_STORAGE_KEY), // 液态玻璃参数
+            Storage.get('shortcuts', null)
         ]);
+        // 快捷方式以 storage 为准（一致快照）：本页内存可能落后于其他标签页的修改；
+        // 仅全新安装（storage 尚无该键）时回退到内存中的默认列表
+        const exportShortcuts = storedShortcutsRaw != null
+            ? parseStoredShortcuts(storedShortcutsRaw)
+            : sanitizeShortcuts(shortcuts, DEFAULT_SHORTCUTS);
         const exportData = {
-            shortcuts: sanitizeShortcuts(shortcuts, DEFAULT_SHORTCUTS),
+            schemaVersion: 1,
+            shortcuts: exportShortcuts,
             gridCols,
             gridSize,
             scale,
@@ -1652,33 +2027,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             glassParams: glassParams === null ? undefined : glassParams
         };
         
-        // 收集所有favicon缓存：优先按键索引按需读取，避免 get(null) 把
-        // 数 MB 的壁纸 data URL 一起读入内存；索引缺失（旧版本数据）时
-        // 回退全量扫描一次并重建索引
+        // 收集所有 favicon 缓存：直接全量扫描（键索引可能落后于实际条目——
+        // 并发写入丢键时按索引导出会漏缓存），导出为低频显式操作，可接受一次全量读取；
+        // 同时以扫描结果重建键索引，修复潜在的索引缺键
         let favicons = {};
-        const faviconIndex = await Storage.get('_faviconKeys', null);
-        if (Array.isArray(faviconIndex)) {
-            const indexKeys = faviconIndex.filter(k => typeof k === 'string' && k.startsWith('favicon_'));
-            if (indexKeys.length > 0) {
-                const items = await new Promise(resolve => {
-                    chrome.storage.local.get(indexKeys, res => resolve(chrome.runtime.lastError ? {} : res));
-                });
-                favicons = items;
-            }
-        } else {
-            const items = await new Promise(resolve => {
-                chrome.storage.local.get(null, res => resolve(chrome.runtime.lastError ? {} : (res || {})));
-            });
-            const keys = Object.keys(items).filter(key => key.startsWith('favicon_'));
-            keys.forEach(key => { favicons[key] = items[key]; });
-            // 重建索引，后续导出/导入走按需读取路径
-            Storage.setImmediate('_faviconKeys', keys);
-        }
+        const items = await new Promise(resolve => {
+            chrome.storage.local.get(null, res => resolve(chrome.runtime.lastError ? {} : (res || {})));
+        });
+        const faviconKeyList = Object.keys(items).filter(key => key.startsWith('favicon_'));
+        faviconKeyList.forEach(key => { favicons[key] = items[key]; });
         favicons = Object.fromEntries(
             Object.entries(favicons)
                 .sort((a, b) => Number(b[1]?.timestamp || 0) - Number(a[1]?.timestamp || 0))
                 .slice(0, MAX_EXPORTED_FAVICONS)
         );
+        Storage.setImmediate('_faviconKeys', Object.keys(favicons)).catch(() => {});
         exportData.favicons = sanitizeFaviconCache(favicons);
 
         // 创建一个 Blob 对象并下载
@@ -1702,125 +2065,115 @@ document.addEventListener('DOMContentLoaded', async () => {
         const file = e.target.files[0];
         if (!file) return;
 
-        // 超大文件 readAsText + JSON.parse 会直接卡死页面；正常导出
-        // （含 12MB 上限的壁纸 data URL × 2）远低于此阈值
-        if (file.size > 32 * 1024 * 1024) {
-            showError('文件过大（超过 32MB），请选择有效的导出文件');
+        // 导入大小上限需覆盖"本扩展可导出的最大合法备份"：120 个快捷方式 × 最大
+        // 图标 data URL（~700K 字符）+ 2 × 12MB 壁纸 + favicon 缓存，最坏约 150MB 字符。
+        // 此前的 32MB 上限会导致"能导出的备份无法重新导入"
+        const MAX_IMPORT_FILE_BYTES = 256 * 1024 * 1024;
+        if (file.size > MAX_IMPORT_FILE_BYTES) {
+            showError('文件过大（超过 256MB），请选择有效的导出文件');
             importDataInput.value = '';
             return;
         }
-
-        // 导入会覆盖现有全部数据，属破坏性操作，须二次确认
-        if (!window.confirm('导入将覆盖当前的快捷方式、布局、外观与背景数据，确定继续吗？')) {
-            importDataInput.value = '';
-            return;
+        // 超大文件解析耗时较长，提前告知；仍允许继续
+        if (file.size > 32 * 1024 * 1024) {
+            if (!window.confirm(`文件较大（约 ${Math.round(file.size / 1024 / 1024)}MB），解析可能需要数秒，继续吗？`)) {
+                importDataInput.value = '';
+                return;
+            }
         }
 
         const reader = new FileReader();
         reader.onload = async function(event) {
             try {
                 const importData = validateImportedData(JSON.parse(event.target.result));
-                
-                // 导入数据
-                if (importData.shortcuts !== undefined) {
-                    shortcuts = importData.shortcuts;
-                    await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
-                }
-                
-                if (importData.gridCols !== undefined) {
-                    await Storage.setImmediate('gridCols', importData.gridCols);
-                }
-                
-                if (importData.gridSize !== undefined) {
-                    await Storage.setImmediate('gridSize', importData.gridSize);
-                }
-                
-                // 导入显示比例设置
-                if (importData.scale !== undefined) {
-                    await Storage.setImmediate('scale', importData.scale);
-                }
-                
-                if (importData.customBg !== undefined) {
-                    if (importData.customBg) {
-                        await Storage.setImmediate('customBg', importData.customBg);
-                    } else {
-                        await Storage.remove('customBg');
-                    }
+
+                // 破坏性操作二次确认——在校验后进行，可展示条目数、丢弃原因与覆盖范围，
+                // 避免静默丢弃用户数据或以模糊文案掩盖覆盖范围
+                const shortcutCount = importData.shortcuts ? importData.shortcuts.length : null;
+                const droppedNote = importData.droppedShortcuts > 0
+                    ? `，另有 ${importData.droppedShortcuts} 个无效条目将被丢弃（名称/网址非法或超出 120 个上限）`
+                    : '';
+                const shortcutNote = shortcutCount === null
+                    ? '不更改快捷方式'
+                    : `导入 ${shortcutCount} 个快捷方式${droppedNote}`;
+                if (!window.confirm(`${shortcutNote}。\n布局、外观、颜色模式与背景设置将被备份内容覆盖，确定继续吗？`)) {
+                    importDataInput.value = '';
+                    return;
                 }
 
-                if (importData.bingBg !== undefined) {
-                    if (importData.bingBg) {
-                        await Storage.setImmediate('bingBg', importData.bingBg);
-                    } else {
-                        await Storage.remove('bingBg');
-                    }
-                }
+                // --- 集中提交：所有键合并为一次 chrome.storage.local.set ---
+                ensureShortcutIds(importData.shortcuts || []);
+                const shortcutsJson = importData.shortcuts !== undefined
+                    ? JSON.stringify(importData.shortcuts)
+                    : undefined;
+                const [currentVersion] = await Promise.all([Storage.get(SHORTCUTS_VERSION_KEY, 0)]);
+                const batch = {};
+                if (shortcutsJson !== undefined) batch.shortcuts = shortcutsJson;
+                batch[SHORTCUTS_VERSION_KEY] = (Number(currentVersion) || 0) + 1;
+                if (importData.gridCols !== undefined) batch.gridCols = importData.gridCols;
+                if (importData.gridSize !== undefined) batch.gridSize = importData.gridSize;
+                if (importData.scale !== undefined) batch.scale = importData.scale;
+                if (importData.customBg !== undefined && importData.customBg) batch.customBg = importData.customBg;
+                if (importData.bingBg !== undefined && importData.bingBg) batch.bingBg = importData.bingBg;
+                if (importData.bingLastFetch !== undefined) batch.bingLastFetch = importData.bingLastFetch;
+                if (importData.bgMode !== undefined) batch.bgMode = importData.bgMode;
+                if (importData.bingQuality !== undefined) batch.bingQuality = importData.bingQuality;
+                if (importData.bingInterval !== undefined) batch.bingInterval = importData.bingInterval;
+                if (importData.colorMode !== undefined) batch.colorMode = importData.colorMode;
 
-                if (importData.bingLastFetch !== undefined) {
-                    await Storage.setImmediate('bingLastFetch', importData.bingLastFetch);
-                }
-
-                if (importData.bgMode !== undefined) {
-                    await Storage.setImmediate('bgMode', importData.bgMode);
-                    try { localStorage.setItem('_bgMode', importData.bgMode); } catch(e) {}
-                }
-
-                if (importData.bingQuality !== undefined) {
-                    await Storage.setImmediate('bingQuality', importData.bingQuality);
-                }
-
-                if (importData.bingInterval !== undefined) {
-                    await Storage.setImmediate('bingInterval', importData.bingInterval);
-                }
-
-                // 导入颜色模式设置
-                if (importData.colorMode !== undefined) {
-                    await Storage.setImmediate('colorMode', importData.colorMode);
-                    try { localStorage.setItem('_colorMode', importData.colorMode); } catch(e) {}
-                }
-                
-                // 导入液态玻璃参数（applySettings 内部完成区间校验并热更新滤镜）
+                // 液态玻璃参数：有引擎时先经 applySettings 校验并热更新，再持久化净化后的值
                 if (importData.glassParams !== undefined) {
                     if (window.LiquidGlass) {
-                        const sanitizedGlass = window.LiquidGlass.applySettings(importData.glassParams);
-                        await Storage.setImmediate(GLASS_STORAGE_KEY, sanitizedGlass);
+                        batch[GLASS_STORAGE_KEY] = window.LiquidGlass.applySettings(importData.glassParams);
                         window.dispatchEvent(new CustomEvent('liquidglass:settingschange'));
                     } else {
-                        await Storage.setImmediate(GLASS_STORAGE_KEY, importData.glassParams);
+                        batch[GLASS_STORAGE_KEY] = importData.glassParams;
                     }
                 }
 
-                // 导入favicon缓存
+                // favicon 缓存：导入条目 + 重建键索引；旧条目清理在提交成功后进行
+                let staleFaviconKeys = [];
                 if (importData.favicons !== undefined) {
-                    // 收集所有favicon键（优先键索引，缺失时回退全量扫描）
-                    let faviconKeys = [];
-                    const importIndex = await Storage.get('_faviconKeys', null);
-                    if (Array.isArray(importIndex)) {
-                        faviconKeys = importIndex.filter(k => typeof k === 'string' && k.startsWith('favicon_'));
-                    } else {
-                        await new Promise(resolve => {
-                            chrome.storage.local.get(null, (items = {}) => {
-                                if (!chrome.runtime.lastError) {
-                                    Object.keys(items).forEach(key => {
-                                        if (key.startsWith('favicon_')) faviconKeys.push(key);
-                                    });
-                                }
-                                resolve();
-                            });
-                        });
-                    }
-
-                    // 清除现有的favicon缓存
-                    if (faviconKeys.length > 0) {
-                        await Storage.remove(faviconKeys);
-                    }
-
-                    // 导入新的favicon缓存并重建键索引
-                    await Storage.setBatch(importData.favicons);
-                    await Storage.setImmediate('_faviconKeys', Object.keys(importData.favicons));
+                    Object.assign(batch, importData.favicons);
+                    batch._faviconKeys = Object.keys(importData.favicons);
+                    const allItems = await new Promise(resolve => {
+                        chrome.storage.local.get(null, res => resolve(chrome.runtime.lastError ? {} : (res || {})));
+                    });
+                    const newKeySet = new Set(batch._faviconKeys);
+                    staleFaviconKeys = Object.keys(allItems)
+                        .filter(key => key.startsWith('favicon_') && !newKeySet.has(key));
                 }
-                
-                // 更新UI
+
+                if (shortcutsJson !== undefined) {
+                    pendingEchoShortcuts.add(shortcutsJson);
+                }
+                try {
+                    await Storage.setImmediateBatch(batch);
+                } catch (err) {
+                    if (shortcutsJson !== undefined) pendingEchoShortcuts.delete(shortcutsJson);
+                    throw err;
+                }
+
+                // 提交成功后再处理需删除的键（null 值字段与被替换的旧 favicon）
+                try {
+                    if (importData.customBg !== undefined && !importData.customBg) {
+                        await Storage.remove('customBg');
+                    }
+                    if (importData.bingBg !== undefined && !importData.bingBg) {
+                        await Storage.remove('bingBg');
+                    }
+                    if (staleFaviconKeys.length > 0) {
+                        await Storage.remove(staleFaviconKeys);
+                    }
+                } catch (cleanupError) {
+                    // 清理失败不影响导入结果（多余条目由容量淘汰机制回收），仅记录
+                    console.warn('[import] 清理旧数据失败:', cleanupError);
+                }
+
+                // --- 持久化成功后提交界面状态 ---
+                if (shortcutsJson !== undefined) {
+                    shortcuts = importData.shortcuts;
+                }
                 const [rawGridCols, rawGridSize, rawScale, rawColorMode] = await Promise.all([
                     Storage.get('gridCols', 5),
                     Storage.get('gridSize', 100),
@@ -1832,6 +2185,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const scale = clampNumber(rawScale, 50, 200, 100);
                 const colorMode = sanitizeColorMode(rawColorMode);
                 currentColorMode = colorMode;
+                if (importData.bgMode !== undefined || importData.colorMode !== undefined) {
+                    try {
+                        localStorage.setItem('_bgMode', sanitizeBgMode(await Storage.get('bgMode', 'default')));
+                        localStorage.setItem('_colorMode', colorMode);
+                    } catch (e) {}
+                }
 
                 applyLayoutSettings(gridCols, gridSize, scale);
                 colInput.value = gridCols;
@@ -1839,7 +2198,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 sizeInput.value = gridSize;
                 scaleInput.value = scale;
                 scaleValDisplay.innerText = scale + '%';
-                
+
                 // 更新颜色模式按钮状态
                 document.querySelectorAll('.color-mode-buttons .glass-btn').forEach(btn => {
                     btn.classList.remove('active');
@@ -1850,11 +2209,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                     activeBtn.classList.add('active');
                     activeBtn.setAttribute('aria-checked', 'true');
                 }
-                
+
                 await renderShortcuts();
 
                 // 重新加载并应用壁纸设置（模式/画质/间隔/背景图）
                 await loadBgSettings();
+
+                // 显式应用解析后的颜色模式：loadBgSettings 的有效壁纸分支在手动模式下
+                // 不会调用 applyColorMode，从浅色页导入"深色+壁纸"时不补这次调用会仍显示浅色
+                await applyColorMode(colorMode);
 
                 showToast('数据导入成功！', 'success');
             } catch (error) {
@@ -1888,45 +2251,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // --- 4. 快捷方式渲染 ---
-    // 历史遗留的远程 URL 图标迁移为 data URL 的共享状态（位于渲染函数外，跨渲染保持）：
-    // - remoteIconFetches：按 URL 去重进行中的下载，避免并发渲染重复请求
-    // - failedRemoteIcons：会话内已确认无法固化的 URL，渲染阶段直接跳过，避免每次打开新标签页都重试
-    const remoteIconFetches = new Map();
-    const failedRemoteIcons = new Set();
-
-    // 远程 URL 图标一次性固化为 data URL：成功后更新磁贴并写入存储，
-    // 之后每次渲染直接使用本地 data URL，不再请求远程资源
-    async function persistRemoteIcon(index, url, imgElement, signal) {
-        if (failedRemoteIcons.has(url)) return;
-
-        let task = remoteIconFetches.get(url);
-        if (!task) {
-            task = fetchIconDataUrl(url).then(dataUrl => ({ dataUrl }));
-            remoteIconFetches.set(url, task);
-            try {
-                await task;
-            } finally {
-                remoteIconFetches.delete(url);
-            }
-        }
-        const { dataUrl } = await task;
-        if (!dataUrl) {
-            // 会话内负缓存：已确认无法固化的 URL 不再于每次渲染时重试
-            failedRemoteIcons.add(url);
-            return;
-        }
-        if (signal && signal.aborted) return;
-
-        failedRemoteIcons.delete(url);
-        if (imgElement.isConnected) imgElement.src = dataUrl;
-        // 写入前校验索引处的图标未被改动（防止固化期间拖拽重排导致错写）
-        if (shortcuts[index] && shortcuts[index].icon === url) {
-            shortcuts[index].icon = dataUrl;
-            try {
-                await Storage.set('shortcuts', JSON.stringify(shortcuts));
-            } catch {}
-        }
-    }
+    // （remoteIconFetches / failedRemoteIcons / persistRemoteIcon 已前移至首次渲染之前，
+    //   见"快捷方式数据层"区块——早渲染会对含远程图标的条目调用 persistRemoteIcon）
 
     async function renderShortcuts() {
         // 拖拽排序期间 DOM 顺序领先于 shortcuts 数组（dragend 才重排），
@@ -1978,7 +2304,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             link.className = 'shortcut-item glass-element';
             link.href = item.url;
             link.draggable = true;
-            link.dataset.index = index;
+            // 稳定 ID 供拖拽排序 / 右键菜单 / 异步图标写回定位条目，
+            // 不再依赖随重排过期的数组下标
+            link.dataset.id = item.id;
             link.setAttribute('role', 'listitem');
             link.setAttribute('aria-label', `${item.name} - 快捷方式`);
 
@@ -1992,7 +2320,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 历史遗留的远程 URL 图标：后台一次性转 data URL 并固化到存储，
                 // 之后渲染直接使用本地 data URL，不再每次请求远程资源
                 if (item.icon.startsWith('http:') || item.icon.startsWith('https:')) {
-                    persistRemoteIcon(index, item.icon, img, signal);
+                    persistRemoteIcon(item.id, item.icon, img, signal);
                 }
             } else {
                 let domain;
@@ -2028,7 +2356,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (img.isConnected) applyFaviconFallback(img, item.url);
             }, { once: true, signal });
 
-            link.addEventListener('contextmenu', (e) => showContextMenu(e, index), { signal });
+            link.addEventListener('contextmenu', (e) => showContextMenu(e, item.id), { signal });
             addDragEvents(link, signal);
 
             fragment.appendChild(link);
@@ -2132,7 +2460,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         item.classList.add('dragging');
         item.style.opacity = '0.5';
 
-        e.dataTransfer.setData('text/plain', item.dataset.index);
+        e.dataTransfer.setData('text/plain', item.dataset.id || '');
         e.dataTransfer.effectAllowed = 'move';
 
         // Chromium 原生拖拽快照对含 backdrop-filter 的圆角元素会在四角漏出
@@ -2212,20 +2540,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             clearDragIndicators();
 
-            const shortcutItems = grid.querySelectorAll('.shortcut-item');
-            const newShortcuts = [];
-            
-            shortcutItems.forEach((shortcutItem) => {
-                const itemIndex = parseInt(shortcutItem.dataset.index);
-                newShortcuts.push(shortcuts[itemIndex]);
-            });
-            
-            shortcutItems.forEach((shortcutItem, index) => {
-                shortcutItem.dataset.index = index;
-            });
-            
-            shortcuts = newShortcuts;
-            await Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
+            // 以 DOM 实时顺序为准、按稳定 ID 重排（后台按 ID 映射最新列表，
+            // 期间被其他页面删除的条目自动跳过，新出现的条目追加到末尾）
+            const domIds = Array.from(grid.querySelectorAll('.shortcut-item'))
+                .map(el => el.dataset.id)
+                .filter(Boolean);
+            try {
+                await mutateShortcuts({ type: 'reorder', ids: domIds });
+            } catch (err) {
+                showError('排序保存失败，请重试', err);
+            }
         }, { signal });
     }
     
@@ -2234,9 +2558,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- 6. 增删改查弹窗逻辑 ---
     const addBtn = document.getElementById('add-shortcut-btn');
     
-    addBtn.addEventListener('click', () => { 
-        isEditing = false; 
-        nameInput.value = ''; 
+    addBtn.addEventListener('click', () => {
+        editSession++; // 新建会话
+        editTargetId = null;
+        nameInput.value = '';
         urlInput.value = '';
         iconInput.value = ''; // 清空图标输入框
         iconPreviewFallback = null; // 新建快捷方式无站点 favicon 回退
@@ -2267,7 +2592,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         const reader = new FileReader();
+        const uploadSession = editSession;
         reader.onload = function(event) {
+            // 会话失效（对话框已关闭/切换目标）时不回写输入框
+            if (uploadSession !== editSession) return;
             iconInput.value = event.target.result;
             updateIconPreview();
         };
@@ -2282,6 +2610,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        const session = editSession;
         refreshIconBtn.disabled = true;
 
         try {
@@ -2290,6 +2619,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 url: fullUrl,
                 forceRefresh: true
             });
+
+            // 等待期间会话失效（取消/关闭/切换目标）：不改动任何输入框与预览
+            if (session !== editSession) return;
 
             if (response && response.dataUrl) {
                 iconInput.value = response.dataUrl;
@@ -2302,6 +2634,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             updateIconPreview();
         } catch {
+            if (session !== editSession) return;
             iconPreviewFallback = buildFaviconPreviewUrl(fullUrl);
             updateIconPreview();
         } finally {
@@ -2315,10 +2648,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         contextMenu.setAttribute('aria-hidden', visible ? 'false' : 'true');
     }
 
-    function showContextMenu(e, index) {
+    function showContextMenu(e, id) {
         e.preventDefault();
         e.stopPropagation();
-        contextMenuIndex = index;
+        contextMenuId = id;
         // 简单的边界检测，防止菜单超出屏幕
         let top = e.clientY;
         let left = e.clientX;
@@ -2338,6 +2671,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function hideContextMenu() {
         setContextMenuVisible(false);
+        contextMenuId = null;
     }
 
     // Esc 关闭右键菜单 + 方向键导航
@@ -2379,46 +2713,49 @@ document.addEventListener('DOMContentLoaded', async () => {
     
 
     
-    function deleteContextShortcut() {
+    async function deleteContextShortcut() {
         setContextMenuVisible(false);
-        // 边界校验：菜单打开期间快捷方式列表可能已变化（如其他页面导入数据），防止误删或越界
-        if (contextMenuIndex > -1 && contextMenuIndex < shortcuts.length) { 
-            shortcuts.splice(contextMenuIndex, 1); 
-            Storage.setImmediate('shortcuts', JSON.stringify(shortcuts));
-            renderShortcuts(); 
-        } 
+        // 按稳定 ID 定位：菜单打开期间列表变化（拖拽重排 / 其他页面修改）不会误删相邻条目
+        const targetId = contextMenuId;
+        if (!targetId) return;
+        try {
+            const next = await mutateShortcuts({ type: 'remove', id: targetId });
+            if (next) await renderShortcuts();
+        } catch (err) {
+            showError('删除失败，请重试', err);
+        }
     }
 
     function editContextShortcut() {
         setContextMenuVisible(false);
-        // 边界校验：同上，防止索引过期导致编辑错项或越界
-        if (contextMenuIndex > -1 && contextMenuIndex < shortcuts.length) {
-            isEditing = true; 
-            editIndex = contextMenuIndex;
-            nameInput.value = shortcuts[editIndex].name; 
-            urlInput.value = shortcuts[editIndex].url;
-            // 填充图标URL（如果存在）
-            iconInput.value = shortcuts[editIndex].icon || '';
-            // 未设置自定义图标时，用站点 favicon 作为预览回退，使预览与磁贴显示一致
-            if (shortcuts[editIndex].icon) {
-                iconPreviewFallback = null;
-            } else {
-                // 先用 _favicon 接口即时占位，再异步替换为磁贴所用的最佳 favicon（同源 chrome.storage.local）
-                iconPreviewFallback = buildFaviconPreviewUrl(shortcuts[editIndex].url);
-                const targetIndex = editIndex;
-                resolveFaviconPreview(shortcuts[editIndex].url).then(best => {
-                    // 仅当仍在编辑同一项且未填入自定义图标时，才用最佳 favicon 刷新预览
-                    if (best && isEditing && editIndex === targetIndex && !iconInput.value.trim()) {
-                        iconPreviewFallback = best;
-                        updateIconPreview();
-                    }
-                });
-            }
-            editDialog.showModal();
-            // 对话框显示后再更新预览，确保已有图标的快捷方式能可靠加载并渲染出图标
-            updateIconPreview();
-            if (window.LiquidGlass) { try { window.LiquidGlass.refresh(); } catch {} }
+        // 按稳定 ID 定位，防止索引过期导致编辑错项
+        const target = shortcuts.find(s => s.id === contextMenuId);
+        if (!target) return;
+        editSession++; // 开启新的编辑会话
+        editTargetId = target.id;
+        nameInput.value = target.name;
+        urlInput.value = target.url;
+        // 填充图标URL（如果存在）
+        iconInput.value = target.icon || '';
+        // 未设置自定义图标时，用站点 favicon 作为预览回退，使预览与磁贴显示一致
+        if (target.icon) {
+            iconPreviewFallback = null;
+        } else {
+            // 先用 _favicon 接口即时占位，再异步替换为磁贴所用的最佳 favicon（同源 chrome.storage.local）
+            iconPreviewFallback = buildFaviconPreviewUrl(target.url);
+            const session = editSession;
+            resolveFaviconPreview(target.url).then(best => {
+                // 仅当仍在同一编辑会话且未填入自定义图标时，才用最佳 favicon 刷新预览
+                if (best && session === editSession && editTargetId === target.id && !iconInput.value.trim()) {
+                    iconPreviewFallback = best;
+                    updateIconPreview();
+                }
+            });
         }
+        editDialog.showModal();
+        // 对话框显示后再更新预览，确保已有图标的快捷方式能可靠加载并渲染出图标
+        updateIconPreview();
+        if (window.LiquidGlass) { try { window.LiquidGlass.refresh(); } catch {} }
     }
 
     function handleMenuKeydown(action) {
@@ -2437,64 +2774,75 @@ document.addEventListener('DOMContentLoaded', async () => {
     menuEdit.addEventListener('keydown', handleMenuKeydown(editContextShortcut));
     
     // 应用颜色模式
-    async function applyColorMode(mode) {
-        mode = sanitizeColorMode(mode);
+    // 异步检测（图片解码/亮度采样）完成后复核请求令牌——检测期间用户切换了
+    // 手动主题、切换了背景或再次发起检测时，旧结果整体丢弃，不再修改 DOM
+    // 或覆盖缓存（修复旧的自动检测覆盖后来手动选择的问题）
+
+    // 主题统一提交点：应用 body 极性类 + 持久化权威结果 + 同步文本颜色类
+    function commitResolvedTheme(theme) {
         const body = document.body;
-        
+        // 原子切换：仅在结果与当前不同时修改类名
+        const targetClass = theme === 'light' ? 'light-bg' : 'dark-bg';
+        const removeClass = theme === 'light' ? 'dark-bg' : 'light-bg';
+        if (!body.classList.contains(targetClass)) {
+            body.classList.remove(removeClass);
+            body.classList.add(targetClass);
+        }
+        // 持久化实际主题，供下次首绘前的 theme-init.js 同步读取
+        try { localStorage.setItem('_resolvedTheme', theme); } catch(e) {}
+        return updateTextColorClasses(theme);
+    }
+
+    async function applyColorMode(mode, preloadedBgVal) {
+        mode = sanitizeColorMode(mode);
+        const requestToken = ++themeRequestToken;
+
         // 解析具体主题：自动模式根据背景亮度/系统偏好计算，手动模式直接使用指定值。
         // 关键：不在异步检测前移除当前主题类，避免检测期间回退 :root 深色默认导致闪烁；
         // 保持当前主题不动，检测完成后仅在结果不同时原子切换。
-        let currentTheme;
+        let resolvedTheme;
         if (mode === 'auto') {
             if (document.documentElement.classList.contains('has-custom-bg')) {
-                // 直接用存储中的壁纸值做亮度检测，避免再走 getComputedStyle 嗅探整段 data URL
-                let bgVal = null;
-                let bgModeNow = null;
-                try { bgModeNow = localStorage.getItem('_bgMode'); } catch(e) {}
-                if (bgModeNow === 'bing') {
-                    bgVal = sanitizeBackgroundValue(await Storage.get('bingBg'));
-                } else if (bgModeNow === 'custom') {
-                    bgVal = sanitizeBackgroundValue(await Storage.get('customBg'));
+                // 直接用壁纸 data URL 做亮度检测，避免再走 getComputedStyle 嗅探整段 data URL
+                let bgVal = preloadedBgVal !== undefined ? sanitizeBackgroundValue(preloadedBgVal) : null;
+                if (!bgVal) {
+                    let bgModeNow = null;
+                    try { bgModeNow = localStorage.getItem('_bgMode'); } catch(e) {}
+                    if (bgModeNow === 'bing') {
+                        bgVal = sanitizeBackgroundValue(await Storage.get('bingBg'));
+                    } else if (bgModeNow === 'custom') {
+                        bgVal = sanitizeBackgroundValue(await Storage.get('customBg'));
+                    }
                 }
-                currentTheme = await detectBackgroundColor(bgVal);
+                resolvedTheme = await detectBackgroundBrightness(bgVal);
             } else {
                 // 竞态保护：bgMode 为 bing/custom 但 has-custom-bg 类尚未添加时，
                 // 用上次权威检测结果而非系统偏好，避免覆盖正确的缓存主题
                 let bgModeNow;
                 try { bgModeNow = localStorage.getItem('_bgMode'); } catch(e) {}
                 if (bgModeNow === 'bing' || bgModeNow === 'custom') {
-                    currentTheme = getCachedOrSystemTheme();
+                    resolvedTheme = getCachedOrSystemTheme();
                 } else {
-                    currentTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                    resolvedTheme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
                 }
             }
         } else {
-            currentTheme = mode;
+            resolvedTheme = mode;
         }
 
-        // 原子切换：仅在结果与当前不同时修改类名
-        const targetClass = currentTheme === 'light' ? 'light-bg' : 'dark-bg';
-        const removeClass = currentTheme === 'light' ? 'dark-bg' : 'light-bg';
-        if (!body.classList.contains(targetClass)) {
-            body.classList.remove(removeClass);
-            body.classList.add(targetClass);
-        }
-
-        // 持久化实际主题，供下次首绘前的 theme-init.js 同步读取
-        // （chrome.storage 中的 resolvedTheme 键从未被消费，不再写入）
-        try { localStorage.setItem('_resolvedTheme', currentTheme); } catch(e) {}
-        
-        await updateTextColorClasses(currentTheme);
+        // 检测期间出现了更新的主题请求：放弃本次提交，由最新请求负责应用
+        if (requestToken !== themeRequestToken) return;
+        await commitResolvedTheme(resolvedTheme);
     }
-    
-    // 检测背景亮度并应用对应主题
-    // preferredBgUrl：调用方已持有的背景 data URL（可选）；缺省时回退为从计算样式嗅探
-    async function detectBackgroundColor(preferredBgUrl = null) {
-        const body = document.body;
+
+    // 检测背景亮度并返回对应主题（'light' | 'dark'）——纯计算函数，
+    // 不修改 DOM / 不写缓存；应用由 applyColorMode 的统一提交点负责
+    // preferredBgVal：调用方已持有的背景 data URL（可选）；缺省时回退为从计算样式嗅探
+    async function detectBackgroundBrightness(preferredBgVal = null) {
         let backgroundImage = '';
-        
-        if (preferredBgUrl) {
-            backgroundImage = `url("${preferredBgUrl}")`;
+
+        if (preferredBgVal) {
+            backgroundImage = `url("${preferredBgVal}")`;
         } else {
             // 获取预加载背景是否有图片
             const preloadBgEl = document.getElementById('preload-bg');
@@ -2502,103 +2850,66 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const preloadStyle = window.getComputedStyle(preloadBgEl);
                 backgroundImage = preloadStyle.backgroundImage;
             }
-            
+
             // 如果预加载背景没有图片，检查body的背景图
             if (!backgroundImage || backgroundImage === 'none' || !backgroundImage.includes('url')) {
-                const bodyStyle = window.getComputedStyle(body);
+                const bodyStyle = window.getComputedStyle(document.body);
                 backgroundImage = bodyStyle.backgroundImage;
             }
         }
-        
+
         // 如果有自定义背景图
         const urlMatch = backgroundImage.match(/url\(["']?(.*?)["']?\)/);
-        let theme = 'dark'; // 默认主题
         if (urlMatch && urlMatch[1] && urlMatch[1] !== 'none') {
-            return new Promise(resolve => {
-                const img = new Image();
-                img.crossOrigin = 'Anonymous';
-                img.onload = async function() {
-                    try {
-                        const canvas = document.createElement('canvas');
-                        const ctx = canvas.getContext('2d');
-                        const sampleSize = 64;
-                        canvas.width = sampleSize;
-                        canvas.height = sampleSize;
-                        ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
+            try {
+                return await new Promise((resolve) => {
+                    const img = new Image();
+                    img.crossOrigin = 'Anonymous';
+                    img.onload = function() {
+                        try {
+                            const canvas = document.createElement('canvas');
+                            const ctx = canvas.getContext('2d');
+                            const sampleSize = 64;
+                            canvas.width = sampleSize;
+                            canvas.height = sampleSize;
+                            ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
 
-                        const imageData = ctx.getImageData(0, 0, sampleSize, sampleSize);
-                        const data = imageData.data;
-                        
-                        let totalBrightness = 0;
-                        let count = 0;
-                        for (let i = 0; i < data.length; i += 4) {
-                            const r = data[i];
-                            const g = data[i + 1];
-                            const b = data[i + 2];
-                            const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-                            totalBrightness += brightness;
-                            count++;
+                            const data = ctx.getImageData(0, 0, sampleSize, sampleSize).data;
+
+                            let totalBrightness = 0;
+                            let count = 0;
+                            for (let i = 0; i < data.length; i += 4) {
+                                const r = data[i];
+                                const g = data[i + 1];
+                                const b = data[i + 2];
+                                totalBrightness += (r * 299 + g * 587 + b * 114) / 1000;
+                                count++;
+                            }
+
+                            const averageBrightness = totalBrightness / count;
+                            resolve(averageBrightness > 128 ? 'light' : 'dark');
+                        } catch (e) {
+                            console.warn('无法分析背景图片亮度（可能受 CORS 限制），使用默认深色主题', e);
+                            resolve('dark');
                         }
-                        
-                        const averageBrightness = totalBrightness / count;
-                        
-                        if (averageBrightness > 128) {
-                            theme = 'light';
-                            body.classList.remove('dark-bg');
-                            body.classList.add('light-bg');
-                        } else {
-                            body.classList.remove('light-bg');
-                            body.classList.add('dark-bg');
-                        }
-                    } catch (e) {
-                        console.warn('无法分析背景图片亮度（可能受 CORS 限制），使用默认深色主题', e);
-                        theme = 'dark';
-                        body.classList.remove('light-bg');
-                        body.classList.add('dark-bg');
-                    }
-                    
-                    persistResolvedTheme(theme);
-                    await updateTextColorClasses(theme);
-                    resolve(theme);
-                };
-                img.onerror = async function() {
-                    console.warn('背景图片加载失败，使用默认深色主题');
-                    theme = 'dark';
-                    body.classList.remove('light-bg');
-                    body.classList.add('dark-bg');
-                    persistResolvedTheme('dark');
-                    await updateTextColorClasses('dark');
-                    resolve('dark');
-                };
-                img.src = urlMatch[1];
-            });
+                    };
+                    img.onerror = function() {
+                        console.warn('背景图片加载失败，使用默认深色主题');
+                        resolve('dark');
+                    };
+                    img.src = urlMatch[1];
+                });
+            } catch {
+                return 'dark';
+            }
         }
-        
+
         // 没有自定义背景图，根据系统主题偏好判断
-        const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
-        theme = prefersLight ? 'light' : 'dark';
-        
-        if (prefersLight) {
-            body.classList.remove('dark-bg');
-            body.classList.add('light-bg');
-        } else {
-            // 默认深色
-            body.classList.remove('light-bg');
-            body.classList.add('dark-bg');
-        }
-        
-        persistResolvedTheme(theme);
-        await updateTextColorClasses(theme);
-        return theme;
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }
 
-    // 持久化权威主题结果到 localStorage（供下次首绘前的 theme-init.js 同步读取）
-    function persistResolvedTheme(theme) {
-        try { localStorage.setItem('_resolvedTheme', theme); } catch(e) {}
-    }
-    
     // 更新文本颜色类
-    // theme: 'light' | 'dark'，由 applyColorMode / detectBackgroundColor 权威计算后传入
+    // theme: 'light' | 'dark'，由 applyColorMode 的统一提交点（commitResolvedTheme）传入
     async function updateTextColorClasses(theme) {
         // 主题解析落定后同步对话框极性（所有主题解析路径都会经过此处，
         // 保证纯黑/纯白壁纸上对话框 scrim 与文字极性一致）
@@ -2677,6 +2988,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             dlg.querySelectorAll(':scope > .toast-container--dialog').forEach(c => c.remove());
         });
     });
+
+    // 初始化完成：启用设置类键的跨页同步（此前运行时状态尚未就绪，仅同步 shortcuts）
+    settingsSyncReady = true;
 
     initDragAndDrop();
 });

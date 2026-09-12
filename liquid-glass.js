@@ -116,6 +116,17 @@
     /** @type {Map<string, string>} 缓存键 -> filter id（插入序即 LRU 序） */
     const cache = new Map();
     const CACHE_MAX = 24;
+    /** @type {Map<string, Set<Element>>} filter id -> 引用该滤镜的元素集合 */
+    const filterRefs = new Map();
+    /** @type {WeakMap<Element, string>} 元素 -> 当前引用的 filter id */
+    const nodeFilter = new WeakMap();
+
+    function releaseFilterRef(node, id) {
+        const refs = filterRefs.get(id);
+        if (!refs) return;
+        refs.delete(node);
+        if (refs.size === 0) filterRefs.delete(id);
+    }
 
     /* ==================================================================
      * §Refraction —— Snell–Descartes 折射
@@ -374,13 +385,26 @@
         defsHost.appendChild(filter);
         cache.set(key, id);
 
-        // 超出缓存上限时淘汰最旧分组并移除对应节点
+        // 超出缓存上限时按 LRU 淘汰最旧分组，但只淘汰无活跃引用的条目：
+        // 动态元素（如连续调参时仍显示的 Toast）引用的滤镜被删除后，
+        // 其 backdrop-filter url(#id) 会悬空失效
         if (cache.size > CACHE_MAX) {
-            const oldestKey = cache.keys().next().value;
-            const oldestId = cache.get(oldestKey);
-            cache.delete(oldestKey);
-            const node = document.getElementById(oldestId);
-            if (node) node.remove();
+            for (const oldestKey of Array.from(cache.keys())) {
+                if (cache.size <= CACHE_MAX) break;
+                const oldestId = cache.get(oldestKey);
+                const refs = filterRefs.get(oldestId);
+                if (refs) {
+                    // 顺带清理已断开（被移除）的引用元素，如消失的 Toast
+                    for (const refNode of Array.from(refs)) {
+                        if (!refNode.isConnected) refs.delete(refNode);
+                    }
+                    if (refs.size === 0) filterRefs.delete(oldestId);
+                }
+                if (filterRefs.has(oldestId)) continue; // 仍被活跃元素引用，跳过
+                cache.delete(oldestKey);
+                const node = document.getElementById(oldestId);
+                if (node) node.remove();
+            }
         }
         return id;
     }
@@ -393,6 +417,15 @@
         if (!Number.isFinite(radius)) radius = cfg.bezel * 2;
         const id = ensureFilter(w, h, radius, cfg);
         if (!id) return;
+        // 登记引用关系：元素换用新滤镜时释放旧引用，供淘汰逻辑判定活跃度
+        const prevId = nodeFilter.get(node);
+        if (prevId !== id) {
+            if (prevId) releaseFilterRef(node, prevId);
+            nodeFilter.set(node, id);
+            let refs = filterRefs.get(id);
+            if (!refs) { refs = new Set(); filterRefs.set(id, refs); }
+            refs.add(node);
+        }
         // -webkit 声明保留纯模糊作为回退；标准声明叠加动态折射滤镜
         node.style.webkitBackdropFilter = `blur(${cfg.backdropBlur}px)`;
         node.style.backdropFilter = `blur(${cfg.backdropBlur}px) url(#${id})`;
@@ -415,9 +448,24 @@
             const merged = override ? Object.assign({}, params, override) : params;
             document.querySelectorAll(selector).forEach((node) => {
                 if (!isVisible(node)) return;
-                try { applyToElement(node, merged); } catch (e) { console.debug('[liquid-glass] 应用失败:', selector, e); }
+                try {
+                    applyToElement(node, merged);
+                    observeGlassElement(node);
+                } catch (e) { console.debug('[liquid-glass] 应用失败:', selector, e); }
             });
         }
+    }
+
+    // 按真实尺寸变化刷新：切换背景子面板、内容增删等会改变玻璃元素尺寸，
+    // 而窗口 resize 事件不会触发；ResizeObserver 覆盖这些路径
+    // （回调经 scheduleRefresh 的 rAF 合并；刷新只改滤镜样式不改尺寸，不会形成回环）
+    let sizeObserver = null;
+    function observeGlassElement(node) {
+        if (typeof ResizeObserver === 'undefined') return;
+        if (!sizeObserver) {
+            sizeObserver = new ResizeObserver(() => scheduleRefresh());
+        }
+        sizeObserver.observe(node);
     }
 
     let refreshScheduled = false;

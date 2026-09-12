@@ -46,19 +46,31 @@ const MAX_REMOTE_IMAGE_BYTES = 16 * 1024 * 1024; // 远程壁纸响应体大小�
 const MAX_JSON_BYTES = 5 * 1024 * 1024;          // 接口文本响应体大小上限
 const FAILED_FAVICON_TTL = 24 * 60 * 60 * 1000;  // 图标获取失败的负缓存时长，期内不再重试
 const FAVICON_INDEX_KEY = '_faviconKeys'; // favicon 键索引：导出时免 get(null) 全量读（含数 MB 壁纸）
+const MAX_SHORTCUTS_BG = 120; // 与 script.js 的 MAX_SHORTCUTS 保持一致
+
+// favicon 维护互斥队列：索引更新与容量清理都是"读取-修改-写回"的复合操作，
+// 并发执行会互相覆盖（两个并发 addToFaviconIndex 从同一索引出发，最终只留一个键）。
+// MV3 Service Worker 内以 Promise 链串行化所有维护操作
+let faviconMaintenanceChain = Promise.resolve();
+function enqueueFaviconMaintenance(task) {
+    const run = faviconMaintenanceChain.then(task, task);
+    faviconMaintenanceChain = run.then(() => {}, () => {});
+    return run;
+}
 
 async function addToFaviconIndex(key) {
-    try {
-        const res = await chrome.storage.local.get(FAVICON_INDEX_KEY);
-        const keys = Array.isArray(res[FAVICON_INDEX_KEY]) ? res[FAVICON_INDEX_KEY] : [];
-        if (!keys.includes(key)) {
-            keys.push(key);
-            await chrome.storage.local.set({ [FAVICON_INDEX_KEY]: keys });
-        }
-    } catch {}
+    return enqueueFaviconMaintenance(async () => {
+        try {
+            const res = await chrome.storage.local.get(FAVICON_INDEX_KEY);
+            const keys = Array.isArray(res[FAVICON_INDEX_KEY]) ? res[FAVICON_INDEX_KEY] : [];
+            if (!keys.includes(key)) {
+                keys.push(key);
+                await chrome.storage.local.set({ [FAVICON_INDEX_KEY]: keys });
+            }
+        } catch {}
+    });
 }
-const MAX_FAVICON_CACHE_ENTRIES = 80; // 与 script.js 的 MAX_EXPORTED_FAVICONS 保持一致
-// 自定义图标 URL 固化的下载大小上限：base64 膨胀约 4/3，需保证转换后的
+const MAX_FAVICON_CACHE_ENTRIES = 80; // 与 script.js 的 MAX_EXPORTED_FAVICONS 保持一致// 自定义图标 URL 固化的下载大小上限：base64 膨胀约 4/3，需保证转换后的
 // data URL 字符数不超过 script.js 的 MAX_ICON_DATA_URL_CHARS（750KB）
 const MAX_ICON_BLOB_BYTES = 512 * 1024;
 const ALLOWED_PAGE_PROTOCOLS = new Set(['http:', 'https:']);
@@ -79,6 +91,178 @@ function getDomainUrl(value) {
     return `${url.protocol}//${url.hostname}/`;
 }
 
+// 后台 in-flight 去重：并发请求相同资源（如多个新标签页同时抓取必应壁纸/同一图标）
+// 共享同一次 fetch，避免重复下载与重复缓存写入
+const inflightFetches = new Map();
+function dedupeInflight(key, factory) {
+    if (inflightFetches.has(key)) {
+        return inflightFetches.get(key);
+    }
+    const promise = factory().finally(() => inflightFetches.delete(key));
+    inflightFetches.set(key, promise);
+    return promise;
+}
+
+/* --------------------------------------------------------------------------
+ * 快捷方式修改的串行化执行（多标签页数据一致性）
+ * chrome.storage 无原子 CAS，两个页面各自"读-改-写回"整个数组时，并发修改会
+ * 互相覆盖（最后写入者获胜）。所有修改以 op 描述符路由到这里，在单一
+ * Promise 链内逐个执行，每次都基于最新存储内容应用，写回带版本号递增。
+ * -------------------------------------------------------------------------- */
+const SHORTCUTS_KEY_BG = 'shortcuts';
+const SHORTCUTS_VERSION_KEY_BG = '_shortcutsVersion';
+const ALLOWED_PAGE_PROTOCOLS_BG = new Set(['http:', 'https:']);
+let shortcutOpSeq = 0;
+
+function bgNormalizePageUrl(value) {
+    if (typeof value !== 'string') return null;
+    try {
+        const url = new URL(value);
+        if (!ALLOWED_PAGE_PROTOCOLS_BG.has(url.protocol) || !url.hostname) return null;
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
+
+function bgIsValidIcon(value) {
+    if (typeof value !== 'string' || !value) return false;
+    if (/^data:image\/(?:png|jpeg|jpg|webp|gif|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,/i.test(value)) return true;
+    try {
+        const url = new URL(value);
+        return url.protocol === 'https:' || url.protocol === 'http:' || url.protocol === 'chrome-extension:';
+    } catch {
+        return false;
+    }
+}
+
+// 宽松清洗：字段非法时丢弃该字段（图标）或报错（名称/网址），不静默造出坏条目
+function bgSanitizeFields(fields) {
+    const out = {};
+    if (!fields || typeof fields !== 'object') return out;
+    if (fields.name !== undefined) {
+        const name = typeof fields.name === 'string' ? fields.name.trim().slice(0, 80) : '';
+        if (!name) throw new Error('快捷方式名称无效');
+        out.name = name;
+    }
+    if (fields.url !== undefined) {
+        const url = bgNormalizePageUrl(fields.url);
+        if (!url) throw new Error('快捷方式网址无效');
+        out.url = url;
+    }
+    if (fields.icon !== undefined) {
+        if (fields.icon === null || fields.icon === '') {
+            out.icon = null; // 显式清除
+        } else if (bgIsValidIcon(fields.icon)) {
+            out.icon = fields.icon;
+        } else {
+            throw new Error('快捷方式图标无效');
+        }
+    }
+    return out;
+}
+
+function bgStorageGet(keys) {
+    return new Promise((resolve, reject) => {
+        chrome.storage.local.get(keys, (res) => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(new Error('数据读取失败：' + err.message));
+            else resolve(res);
+        });
+    });
+}
+
+function bgStorageSet(obj) {
+    return new Promise((resolve, reject) => {
+        chrome.storage.local.set(obj, () => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(new Error('数据写入失败：' + err.message));
+            else resolve();
+        });
+    });
+}
+
+let shortcutOpChain = Promise.resolve();
+
+async function applyShortcutOp(op) {
+    const [rawRes, verRes] = await Promise.all([
+        bgStorageGet(SHORTCUTS_KEY_BG),
+        bgStorageGet(SHORTCUTS_VERSION_KEY_BG),
+    ]);
+    let list = [];
+    try {
+        const parsed = JSON.parse(rawRes[SHORTCUTS_KEY_BG] || '[]');
+        if (Array.isArray(parsed)) list = parsed.filter(s => s && typeof s === 'object');
+    } catch {}
+    const version = Number(verRes[SHORTCUTS_VERSION_KEY_BG]) || 0;
+    let changed = true;
+
+    switch (op && op.type) {
+        case 'add': {
+            if (list.length >= MAX_SHORTCUTS_BG) {
+                throw new Error(`快捷方式数量已达上限（${MAX_SHORTCUTS_BG} 个）`);
+            }
+            const fields = bgSanitizeFields(op.item);
+            if (!fields.name || !fields.url) throw new Error('快捷方式名称或网址无效');
+            const id = (typeof op.item.id === 'string' && op.item.id && op.item.id.length <= 64)
+                ? op.item.id
+                : `bg-${Date.now().toString(36)}-${++shortcutOpSeq}`;
+            if (list.some(s => s.id === id)) throw new Error('快捷方式 ID 重复');
+            const item = { id, name: fields.name, url: fields.url };
+            if (fields.icon) item.icon = fields.icon;
+            list.push(item);
+            break;
+        }
+        case 'update': {
+            const index = list.findIndex(s => s.id === op.id);
+            if (index === -1) throw new Error('被编辑的快捷方式已被删除或已在其他标签页修改');
+            const fields = bgSanitizeFields(op.fields);
+            if (!fields.name || !fields.url) throw new Error('快捷方式名称或网址无效');
+            const updated = Object.assign({}, list[index], { name: fields.name, url: fields.url, id: op.id });
+            if (fields.icon) updated.icon = fields.icon;
+            else delete updated.icon; // 未提供图标字段 = 清除图标
+            list[index] = updated;
+            break;
+        }
+        case 'remove': {
+            const before = list.length;
+            list = list.filter(s => s.id !== op.id);
+            changed = list.length !== before;
+            break;
+        }
+        case 'reorder': {
+            const ids = Array.isArray(op.ids) ? op.ids.filter(id => typeof id === 'string') : [];
+            const byId = new Map(list.map(s => [s.id, s]));
+            const next = ids.map(id => byId.get(id)).filter(Boolean);
+            const idSet = new Set(next.map(s => s.id));
+            for (const s of list) if (!idSet.has(s.id)) next.push(s);
+            changed = !(next.length === list.length && next.every((s, i) => s === list[i]));
+            list = next;
+            break;
+        }
+        case 'setIcon': {
+            const item = list.find(s => s.id === op.id);
+            // 图标仍是最初发起下载时的 URL 才写回：固化期间的编辑/删除不会错写
+            if (!item || item.icon !== op.expectUrl) {
+                changed = false;
+                break;
+            }
+            if (!bgIsValidIcon(op.iconUrl)) throw new Error('图标数据无效');
+            item.icon = op.iconUrl;
+            break;
+        }
+        default:
+            throw new Error('未知的快捷方式操作类型');
+    }
+
+    if (!changed) {
+        return { list, json: JSON.stringify(list) };
+    }
+    const json = JSON.stringify(list);
+    await bgStorageSet({ [SHORTCUTS_KEY_BG]: json, [SHORTCUTS_VERSION_KEY_BG]: version + 1 });
+    return { list, json };
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'performSearch') {
         if (typeof request.text !== 'string' || !request.text.trim()) {
@@ -97,7 +281,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'getBestFavicon') {
-        handleGetBestFavicon(request.url, request.forceRefresh)
+        dedupeInflight(`favicon:${normalizePageUrl(request.url)}:${!!request.forceRefresh}`, () =>
+            handleGetBestFavicon(request.url, request.forceRefresh))
             .then(sendResponse)
             .catch(() => {
                 sendResponse({ dataUrl: null });
@@ -106,7 +291,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'fetchWallpaper') {
-        handleFetchWallpaper(request.url, request.timeoutMs || 60000)
+        dedupeInflight(`wallpaper:${request.url}`, () =>
+            handleFetchWallpaper(request.url, request.timeoutMs || 60000))
             .then((result) => {
                 sendResponse(result);
             })
@@ -118,7 +304,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'fetchJson') {
-        handleFetchJson(request.url, request.timeoutMs || 30000)
+        dedupeInflight(`json:${request.url}:${request.timeoutMs || 30000}`, () =>
+            handleFetchJson(request.url, request.timeoutMs || 30000))
             .then((data) => {
                 sendResponse({ success: true, data });
             })
@@ -130,7 +317,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'fetchIcon') {
-        handleFetchIcon(request.url, request.timeoutMs || 15000)
+        dedupeInflight(`icon:${request.url}`, () =>
+            handleFetchIcon(request.url, request.timeoutMs || 15000))
             .then((result) => {
                 sendResponse(result);
             })
@@ -138,6 +326,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 console.error('[BG] fetchIcon 失败:', error);
                 sendResponse({ success: false, error: error.message || '图标下载失败' });
             });
+        return true;
+    }
+
+    if (request.action === 'shortcutOp') {
+        // 快捷方式修改统一入口：所有页面/所有修改在单一 Promise 链内串行执行
+        // "读最新列表 → 应用 → 写回"，消除多标签页整数组写回的相互覆盖
+        const run = shortcutOpChain.then(() => applyShortcutOp(request.op));
+        shortcutOpChain = run.then(() => {}, () => {});
+        run.then(({ list, json }) => {
+            sendResponse({ success: true, shortcuts: list, shortcutsJson: json });
+        }).catch((error) => {
+            sendResponse({ success: false, error: error.message || '快捷方式保存失败' });
+        });
         return true;
     }
 });
@@ -284,6 +485,9 @@ async function handleGetBestFavicon(pageUrl, forceRefresh) {
     if (!bestResult || bestScore < 0) {
         try {
             await chrome.storage.local.set({ [cacheKey]: { failedAt: Date.now() } });
+            // 负缓存同样占用缓存容量：与成功路径一样纳入清理（否则大量失败域名
+            // 会无限累积，且绕过 80 条容量上限）
+            await pruneFaviconCache();
         } catch {}
         return { dataUrl: null };
     }
@@ -363,7 +567,13 @@ const PRUNE_STATE_KEY = '_pruneState';
 const PRUNE_WRITE_THRESHOLD = 5;
 const PRUNE_TIME_THRESHOLD = 10 * 60 * 1000; // 10 分钟
 
+// 与索引更新共用互斥队列：清理会重写整个键索引，与并发 addToFaviconIndex
+// 交错执行会丢失刚加入的键
 async function pruneFaviconCache(force = false) {
+    return enqueueFaviconMaintenance(() => pruneFaviconCacheInner(force));
+}
+
+async function pruneFaviconCacheInner(force = false) {
     let state = { count: 0, lastPruneTime: 0 };
     try {
         const saved = await chrome.storage.local.get(PRUNE_STATE_KEY);
@@ -389,7 +599,9 @@ async function pruneFaviconCache(force = false) {
     const items = await chrome.storage.local.get(null);
     const faviconEntries = Object.entries(items)
         .filter(([key, value]) => key.startsWith('favicon_') && value && typeof value === 'object')
-        .sort((a, b) => Number(b[1].timestamp || 0) - Number(a[1].timestamp || 0));
+        // 负缓存条目（获取失败，仅 failedAt）没有 timestamp：以 failedAt 作为
+        // 排序回退，避免刚写入的负缓存被当作最旧条目优先淘汰
+        .sort((a, b) => Number(b[1].timestamp || b[1].failedAt || 0) - Number(a[1].timestamp || a[1].failedAt || 0));
 
     if (faviconEntries.length > MAX_FAVICON_CACHE_ENTRIES) {
         const keysToRemove = faviconEntries
@@ -398,10 +610,13 @@ async function pruneFaviconCache(force = false) {
         if (keysToRemove.length > 0) {
             await chrome.storage.local.remove(keysToRemove);
         }
-        // 同步键索引（含未淘汰的负缓存键）
+        // 同步键索引：仅收录带 dataUrl 的条目（负缓存不可导出，无需入索引）
         try {
             await chrome.storage.local.set({
-                [FAVICON_INDEX_KEY]: faviconEntries.slice(0, MAX_FAVICON_CACHE_ENTRIES).map(([key]) => key)
+                [FAVICON_INDEX_KEY]: faviconEntries
+                    .slice(0, MAX_FAVICON_CACHE_ENTRIES)
+                    .filter(([, value]) => value.dataUrl)
+                    .map(([key]) => key)
             });
         } catch {}
     }
