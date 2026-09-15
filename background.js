@@ -48,6 +48,48 @@ const FAILED_FAVICON_TTL = 24 * 60 * 60 * 1000;  // 图标获取失败的负缓�
 const FAVICON_INDEX_KEY = '_faviconKeys'; // favicon 键索引：导出时免 get(null) 全量读（含数 MB 壁纸）
 const MAX_SHORTCUTS_BG = 120; // 与 script.js 的 MAX_SHORTCUTS 保持一致
 
+/* --------------------------------------------------------------------------
+ * 消息入口加固
+ * manifest 未配置 externally_connectable，外部网页无法直接发消息；以下校验属于
+ * 纵深防御：即使将来放开或出现同源串扰，也保证只有本扩展页面能驱动后台，
+ * 且只能请求 http(s) 资源、超时参数被钳制在合理区间。
+ * -------------------------------------------------------------------------- */
+const ALLOWED_FETCH_PROTOCOLS_BG = new Set(['http:', 'https:']);
+const MIN_FETCH_TIMEOUT = 1000;
+const MAX_FETCH_TIMEOUT = 120000;
+
+function isTrustedSender(sender) {
+    try {
+        if (!sender || sender.id !== chrome.runtime.id) return false;
+        // 扩展页面 / service worker 自身的消息带 url；外部消息不会有合法的扩展 origin
+        if (typeof sender.url === 'string' && sender.url) {
+            return sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+        }
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// 后台只代理 http(s) 资源：图标/壁纸/接口全部落在此范围，
+// 阻止 file:、data:、chrome-extension: 等协议被当作远程资源请求
+function normalizeFetchTarget(value) {
+    if (typeof value !== 'string') return null;
+    try {
+        const url = new URL(value);
+        if (!ALLOWED_FETCH_PROTOCOLS_BG.has(url.protocol) || !url.hostname) return null;
+        return url.toString();
+    } catch {
+        return null;
+    }
+}
+
+function clampTimeout(value, fallback) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return fallback;
+    return Math.min(MAX_FETCH_TIMEOUT, Math.max(MIN_FETCH_TIMEOUT, Math.round(num)));
+}
+
 // favicon 维护互斥队列：索引更新与容量清理都是"读取-修改-写回"的复合操作，
 // 并发执行会互相覆盖（两个并发 addToFaviconIndex 从同一索引出发，最终只留一个键）。
 // MV3 Service Worker 内以 Promise 链串行化所有维护操作
@@ -70,7 +112,8 @@ async function addToFaviconIndex(key) {
         } catch {}
     });
 }
-const MAX_FAVICON_CACHE_ENTRIES = 80; // 与 script.js 的 MAX_EXPORTED_FAVICONS 保持一致// 自定义图标 URL 固化的下载大小上限：base64 膨胀约 4/3，需保证转换后的
+const MAX_FAVICON_CACHE_ENTRIES = 80; // 与 script.js 的 MAX_EXPORTED_FAVICONS 保持一致
+// 自定义图标 URL 固化的下载大小上限：base64 膨胀约 4/3，需保证转换后的
 // data URL 字符数不超过 script.js 的 MAX_ICON_DATA_URL_CHARS（750KB）
 const MAX_ICON_BLOB_BYTES = 512 * 1024;
 const ALLOWED_PAGE_PROTOCOLS = new Set(['http:', 'https:']);
@@ -255,15 +298,24 @@ async function applyShortcutOp(op) {
             throw new Error('未知的快捷方式操作类型');
     }
 
-    if (!changed) {
-        return { list, json: JSON.stringify(list) };
-    }
     const json = JSON.stringify(list);
+    if (!changed) {
+        // changed=false：存储内容与返回值一致，未发生写入，也不会触发
+        // storage.onChanged。调用方据此决定不登记"回声"，避免回声集合累积
+        return { list, json, changed: false };
+    }
     await bgStorageSet({ [SHORTCUTS_KEY_BG]: json, [SHORTCUTS_VERSION_KEY_BG]: version + 1 });
-    return { list, json };
+    return { list, json, changed: true };
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // 纵深防御：仅接受本扩展页面/自身发出的消息
+    if (!isTrustedSender(sender)) {
+        console.warn('[BG] 已忽略来源不可信的消息:', request && request.action);
+        return false;
+    }
+    if (!request || typeof request.action !== 'string') return false;
+
     if (request.action === 'performSearch') {
         if (typeof request.text !== 'string' || !request.text.trim()) {
             return false;
@@ -281,8 +333,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'getBestFavicon') {
-        dedupeInflight(`favicon:${normalizePageUrl(request.url)}:${!!request.forceRefresh}`, () =>
-            handleGetBestFavicon(request.url, request.forceRefresh))
+        const pageUrl = normalizePageUrl(request.url);
+        if (!pageUrl) {
+            sendResponse({ dataUrl: null });
+            return false;
+        }
+        dedupeInflight(`favicon:${pageUrl}:${!!request.forceRefresh}`, () =>
+            handleGetBestFavicon(pageUrl, request.forceRefresh))
             .then(sendResponse)
             .catch(() => {
                 sendResponse({ dataUrl: null });
@@ -291,8 +348,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'fetchWallpaper') {
-        dedupeInflight(`wallpaper:${request.url}`, () =>
-            handleFetchWallpaper(request.url, request.timeoutMs || 60000))
+        const target = normalizeFetchTarget(request.url);
+        if (!target) {
+            sendResponse({ success: false, error: '不支持的资源地址' });
+            return false;
+        }
+        const timeout = clampTimeout(request.timeoutMs, 60000);
+        dedupeInflight(`wallpaper:${target}:${timeout}`, () =>
+            handleFetchWallpaper(target, timeout))
             .then((result) => {
                 sendResponse(result);
             })
@@ -304,8 +367,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'fetchJson') {
-        dedupeInflight(`json:${request.url}:${request.timeoutMs || 30000}`, () =>
-            handleFetchJson(request.url, request.timeoutMs || 30000))
+        const target = normalizeFetchTarget(request.url);
+        if (!target) {
+            sendResponse({ success: false, error: '不支持的接口地址' });
+            return false;
+        }
+        const timeout = clampTimeout(request.timeoutMs, 30000);
+        dedupeInflight(`json:${target}:${timeout}`, () =>
+            handleFetchJson(target, timeout))
             .then((data) => {
                 sendResponse({ success: true, data });
             })
@@ -317,8 +386,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'fetchIcon') {
-        dedupeInflight(`icon:${request.url}`, () =>
-            handleFetchIcon(request.url, request.timeoutMs || 15000))
+        const target = normalizeFetchTarget(request.url);
+        if (!target) {
+            sendResponse({ success: false, error: '不支持的图标地址' });
+            return false;
+        }
+        const timeout = clampTimeout(request.timeoutMs, 15000);
+        dedupeInflight(`icon:${target}:${timeout}`, () =>
+            handleFetchIcon(target, timeout))
             .then((result) => {
                 sendResponse(result);
             })
@@ -334,8 +409,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // "读最新列表 → 应用 → 写回"，消除多标签页整数组写回的相互覆盖
         const run = shortcutOpChain.then(() => applyShortcutOp(request.op));
         shortcutOpChain = run.then(() => {}, () => {});
-        run.then(({ list, json }) => {
-            sendResponse({ success: true, shortcuts: list, shortcutsJson: json });
+        run.then(({ list, json, changed }) => {
+            sendResponse({ success: true, shortcuts: list, shortcutsJson: json, changed: changed !== false });
         }).catch((error) => {
             sendResponse({ success: false, error: error.message || '快捷方式保存失败' });
         });

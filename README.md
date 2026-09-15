@@ -1,57 +1,51 @@
 # Liquid Newtab
 
-一个自定义浏览器新标签页扩展程序。
+一个自定义新标签页扩展，替换 Chrome 默认新标签页：搜索框、快捷方式网格、壁纸，以及基于 SVG 位移贴图的液态玻璃材质。
 
-## 功能特点
+## 功能
 
-- 美观的自定义新标签页界面
-- 快速访问常用网站
-- 简洁现代的设计风格
-- 轻量级扩展，不占用过多系统资源
+- **快捷方式**：拖拽排序，右键编辑或删除；图标可自动抓取，也可手动填 URL 或上传图片
+- **搜索**：回车即用系统默认搜索引擎搜索
+- **背景**：动态光球、必应每日壁纸、自定义图片三种模式
+- **外观**：浅色 / 深色 / 自动，自动模式下按壁纸亮度决定；液态玻璃参数可实时调整
+- **布局**：列数、图标大小、整体缩放可调
+- **数据**：设置与快捷方式可导出为 JSON 备份，支持导入还原
 
-## 安装方式
+## 安装
 
-### Chrome 商店安装（推荐）
+Chrome 商店：[安装](https://chrome.google.com/webstore/detail/nfpbmpokfnpmikniaoindhbjjpkeglkl)
 
-点击下方链接直接安装：
+手动安装：克隆本仓库，打开 `chrome://extensions/`，开启右上角「开发者模式」，点「加载已解压的扩展程序」并选择项目目录。
 
-[![Chrome Web Store](https://img.shields.io/badge/Chrome-Install-green.svg)](https://chrome.google.com/webstore/detail/nfpbmpokfnpmikniaoindhbjjpkeglkl)
+需要 Chrome 116 或更高版本。
 
-### 开发者模式安装
+## 文件
 
-1. 下载或克隆本仓库代码
-2. 打开浏览器扩展管理页面 (chrome://extensions/)
-3. 开启"开发者模式"
-4. 点击"加载已解压的扩展程序"
-5. 选择本项目所在文件夹
+| 文件 | 说明 |
+| --- | --- |
+| `manifest.json` | 扩展配置 |
+| `newtab.html` | 新标签页结构 |
+| `style.css` | 样式与主题令牌 |
+| `script.js` | 页面逻辑：设置、快捷方式、背景、主题 |
+| `background.js` | Service Worker：图标抓取、壁纸下载、快捷方式串行写入 |
+| `liquid-glass.js` | 液态玻璃折射滤镜引擎 |
+| `theme-init.js` | 首绘前的主题初始化，避免主题闪烁 |
 
-## 文件说明
+## 权限与网络请求
 
-- [manifest.json](manifest.json) - 扩展配置文件
-- [newtab.html](newtab.html) - 新标签页主界面
-- [style.css](style.css) - 页面样式文件
-- [script.js](script.js) - 前端交互逻辑
-- [background.js](background.js) - 后台运行脚本
-- [liquid-glass.js](liquid-glass.js) - 液态玻璃物理折射滤镜引擎
-- [theme-init.js](theme-init.js) - 首绘前主题初始化（防闪烁）
+扩展声明了 `storage`、`unlimitedStorage`、`search`、`favicon` 权限，以及 `http(s)://*/*` 主机权限。主机权限用于下载必应壁纸和用户指定的远程图标，因为这两类请求的目标域名无法预先枚举。
 
-## 外部服务说明
+实际会访问的外部服务：
 
-- 自动获取网站图标时，会向 Google、DuckDuckGo 或 icon.horse 查询对应域名的 favicon。
-- 使用随机必应壁纸功能时，会请求 `cn.bing.com` 的官方壁纸接口（HPImageArchive）获取近 7 天壁纸列表并下载对应图片。
-- 为快捷方式填写远程 URL 自定义图标时，该图标 URL 对应的服务器会在首次保存时被请求一次（下载后以 data URL 形式本地保存）。
-- 上传的本地背景和图标仅保存在浏览器本地扩展存储中。
+- 抓取网站图标：Google（`t1.gstatic.com`、`www.google.com`）、DuckDuckGo、icon.horse
+- 必应壁纸：`cn.bing.com` 的 HPImageArchive 接口
+- 自定义远程图标：保存时请求一次该图标 URL，下载后以 data URL 形式存在本地
 
-## 使用方法
-
-安装扩展后，每次打开新标签页时会自动显示自定义界面。
+上传的背景和图标只保存在浏览器本地扩展存储中，不会上传。除此之外扩展不会向外部发送数据。
 
 ## 致谢
 
-液态玻璃效果（[liquid-glass.js](liquid-glass.js)）的实现基于以下资料的思路与方法，特此致谢：
-
-- **[Liquid Glass in the Browser: Refraction with CSS and SVG — kube.io](https://kube.io/blog/liquid-glass-css-svg/)** —— 本项目玻璃折射效果的实现参考：表面轮廓函数（凸方圆/凸圆/凹面/凸缘）、基于 Snell–Descartes 定律的折射剖面预计算、归一化位移向量场生成 SVG 位移贴图（`maximumDisplacement` 直接用作 `feDisplacementMap` 的 `scale`），以及边缘镜面高光（rim light）的合成方式均源自该博文。
-- 效果灵感来自 Apple 在 WWDC 2025 引入的 **Liquid Glass** 设计语言。
+液态玻璃效果参考 kube.io 的 [Liquid Glass in the Browser: Refraction with CSS and SVG](https://kube.io/blog/liquid-glass-css-svg/)：表面轮廓函数、基于 Snell–Descartes 定律的折射剖面、归一化位移贴图与边缘高光的做法均来自该文。设计语言灵感来自 Apple 在 WWDC 2025 公布的 Liquid Glass。
 
 ## 许可证
 

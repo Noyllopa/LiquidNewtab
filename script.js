@@ -137,6 +137,19 @@ function isValidShortcutId(id) {
     return typeof id === 'string' && id.length >= 1 && id.length <= 64;
 }
 
+// 旧数据（含全新安装的默认条目）的确定性 ID：由 名称+网址 派生。
+// 必须是确定性的——多个新标签页各自补齐时若随机生成，会在持久化前产生不同的
+// ID 集合，导致同一份数据在不同页面被视为不同条目（右键/拖拽按 ID 定位即失效）。
+function legacyShortcutId(item) {
+    const raw = `${item.name || ''}|${item.url || ''}`;
+    let hash = 2166136261;
+    for (let i = 0; i < raw.length; i++) {
+        hash ^= raw.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return 'legacy-' + (hash >>> 0).toString(36);
+}
+
 // 为缺少 ID / ID 重复的列表补齐稳定 ID（就地去重），返回是否发生过补写。
 // 补写 ID 后需要由调用方持久化，使多个新标签页共享同一套 ID。
 function ensureShortcutIds(list) {
@@ -144,7 +157,14 @@ function ensureShortcutIds(list) {
     const seen = new Set();
     for (const item of list) {
         if (!isValidShortcutId(item.id) || seen.has(item.id)) {
-            item.id = makeShortcutId();
+            // 确定性补写：先按内容派生；若与已有 ID 冲突（同名校同网址的重复条目），
+            // 再追加序号，保证同一份列表在任何页面得到完全一致的结果
+            let candidate = legacyShortcutId(item);
+            let suffix = 2;
+            while (seen.has(candidate)) {
+                candidate = `${legacyShortcutId(item)}-${suffix++}`;
+            }
+            item.id = candidate;
             changed = true;
         }
         seen.add(item.id);
@@ -362,7 +382,11 @@ const Storage = (function() {
     function scheduleWrite(key, value) {
         pendingWrites[key] = value;
         if (writeTimeout) clearTimeout(writeTimeout);
-        writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
+        writeTimeout = setTimeout(() => {
+            // 定时器回调丢弃返回值：失败时 flushWrites 会 reject，必须就地吞掉，
+            // 否则产生未处理的 Promise 拒绝（调用方各自持有的 Promise 仍会正常 reject）
+            flushWrites().catch(() => {});
+        }, WRITE_DELAY);
         return new Promise((resolve, reject) => {
             flushResolveQueue.push(err => err ? reject(err) : resolve());
         });
@@ -424,7 +448,7 @@ const Storage = (function() {
         setBatch(items) {
             Object.assign(pendingWrites, items);
             if (writeTimeout) clearTimeout(writeTimeout);
-            writeTimeout = setTimeout(flushWrites, WRITE_DELAY);
+            writeTimeout = setTimeout(() => { flushWrites().catch(() => {}); }, WRITE_DELAY);
             return new Promise((resolve, reject) => {
                 flushResolveQueue.push(err => err ? reject(err) : resolve());
             });
@@ -814,11 +838,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const settingsTabs = document.querySelectorAll('[data-settings-tab]');
     const settingsPanels = document.querySelectorAll('[data-settings-panel]');
 
+    // 默认条目自带固定 ID：全新安装时它们同样是"可被右键/拖拽定位"的正式条目，
+    // 不能依赖运行期随机补齐（否则同一批默认项在各标签页得到不同 ID）
     const DEFAULT_SHORTCUTS = [
-        { name: "Google", url: "https://google.com" },
-        { name: "Bilibili", url: "https://bilibili.com" },
-        { name: "GitHub", url: "https://github.com" },
-        { name: "Unsplash", url: "https://unsplash.com" }
+        { id: "default-google", name: "Google", url: "https://google.com" },
+        { id: "default-bilibili", name: "Bilibili", url: "https://bilibili.com" },
+        { id: "default-github", name: "GitHub", url: "https://github.com" },
+        { id: "default-unsplash", name: "Unsplash", url: "https://unsplash.com" }
     ];
     
     let shortcuts = sanitizeShortcuts(
@@ -826,17 +852,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         DEFAULT_SHORTCUTS
     );
 
-    // 兼容旧数据迁移：为缺少稳定 ID 的既有条目补齐并立即持久化，
-    // 使多个新标签页共用同一套 ID（否则各页随机生成的 ID 会互相冲突）
+    // 首次落盘 / 旧数据迁移：补齐稳定 ID 并立即持久化。
+    // 关键：全新安装时存储中并不存在 shortcuts 键（earlySettings.shortcuts 为
+    // undefined），早期版本仅用 `!= null` 判断会整段跳过，导致默认快捷方式
+    // 既没有 ID、也从未写入存储——右键删除静默失效、编辑命中首个条目、
+    // 拖拽无效，且新增第一条时后台基于空列表覆盖掉全部默认项。
     try {
-        const storedRawForMigration = earlySettings.shortcuts;
-        if (storedRawForMigration != null) {
-            const parsedForMigration = parseJsonSafe(storedRawForMigration, null);
-            if (Array.isArray(parsedForMigration) &&
-                parsedForMigration.some(s => !s || typeof s !== 'object' || !isValidShortcutId(s.id))) {
-                ensureShortcutIds(shortcuts);
-                Storage.setImmediate('shortcuts', JSON.stringify(shortcuts)).catch(() => {});
-            }
+        const parsedForMigration = parseJsonSafe(earlySettings.shortcuts, null);
+        const storedIsValidList = Array.isArray(parsedForMigration);
+        const idsChanged = ensureShortcutIds(shortcuts);
+        if (!storedIsValidList || idsChanged) {
+            Storage.setImmediate('shortcuts', JSON.stringify(shortcuts)).catch(() => {});
         }
     } catch {}
 
@@ -847,6 +873,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 本页刚写出的 shortcuts JSON：storage.onChanged 回声到达时识别"自己写的"，
     // 避免把自己的写入当作远端修改重复采纳
     const pendingEchoShortcuts = new Set();
+    // 回声集合上限：正常情况下写入即产生 onChanged 并消费掉对应项，
+    // 该上限仅用于兜底，避免异常路径下集合无限增长
+    const ECHO_MAX_ENTRIES = 50;
     // 设置类键的跨页同步在初始化完成后才启用（loadBgSettings 等依赖的运行时状态
     // 在初始化过程中尚未就绪）；shortcuts 的采纳不受此限制（依赖均已就绪）
     let settingsSyncReady = false;
@@ -877,7 +906,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             const parsed = parseJsonSafe(json, null);
             const list = Array.isArray(parsed) ? sanitizeShortcuts(parsed, []) : [];
             ensureShortcutIds(list);
-            pendingEchoShortcuts.add(json);
+            // 仅在后台确实写入了存储时登记回声：后台判定"无变化"时不写盘，
+            // 也就不会产生 storage.onChanged 回声，登记后将永远无法被消费而累积
+            if (response.changed !== false) {
+                pendingEchoShortcuts.add(json);
+                // 上限保护：即使出现未预期的回声缺失，也不会无限增长
+                if (pendingEchoShortcuts.size > ECHO_MAX_ENTRIES) {
+                    const oldest = pendingEchoShortcuts.values().next().value;
+                    pendingEchoShortcuts.delete(oldest);
+                }
+            }
             shortcuts = list;
             return list;
         };
@@ -2262,6 +2300,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         shortcutsAbortController = new AbortController();
         const signal = shortcutsAbortController.signal;
         shortcuts = sanitizeShortcuts(shortcuts, DEFAULT_SHORTCUTS);
+        // 兜底：渲染出的 DOM 必须带有效 ID（右键/拖拽按 ID 定位）。
+        // 确定性补齐，多个页面独立执行也得到一致结果；真正的持久化由启动迁移
+        // 与后台修改队列负责。
+        ensureShortcutIds(shortcuts);
         // 数据即将重渲染，关闭可能残留的右键菜单，避免其索引指向过期数据
         hideContextMenu();
 
@@ -2717,7 +2759,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         setContextMenuVisible(false);
         // 按稳定 ID 定位：菜单打开期间列表变化（拖拽重排 / 其他页面修改）不会误删相邻条目
         const targetId = contextMenuId;
-        if (!targetId) return;
+        if (!targetId) {
+            // 不再静默返回：ID 缺失时用户会以为"点了没反应"，给出可诊断的提示
+            showError('无法定位该快捷方式，请刷新页面后重试');
+            return;
+        }
         try {
             const next = await mutateShortcuts({ type: 'remove', id: targetId });
             if (next) await renderShortcuts();
@@ -2728,9 +2774,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function editContextShortcut() {
         setContextMenuVisible(false);
-        // 按稳定 ID 定位，防止索引过期导致编辑错项
+        // 按稳定 ID 定位，防止索引过期导致编辑错项。
+        // 必须先判空：contextMenuId 为 undefined 时 find(s => s.id === undefined)
+        // 会命中首个无 ID 条目，表现为"编辑第 2 个磁贴却打开第 1 个"
+        if (!contextMenuId) {
+            showError('无法定位该快捷方式，请刷新页面后重试');
+            return;
+        }
         const target = shortcuts.find(s => s.id === contextMenuId);
-        if (!target) return;
+        if (!target) {
+            showError('该快捷方式已被删除或在其他标签页中修改');
+            return;
+        }
         editSession++; // 开启新的编辑会话
         editTargetId = target.id;
         nameInput.value = target.name;

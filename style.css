@@ -76,13 +76,7 @@
   --radius-2xl: 24px;
   --radius-full: 9999px;
 
-  /* Shadow Tokens */
-  --shadow-glass: 0 8px 18px rgba(0, 0, 0, 0.12);
-  --shadow-glass-hover: 0 10px 22px rgba(0, 0, 0, 0.16);
-  --shadow-float: 0 8px 20px rgba(0, 0, 0, 0.22);
-  --shadow-dialog: 0 12px 28px rgba(0, 0, 0, 0.18);
-  --shadow-toast: 0 6px 16px rgba(0, 0, 0, 0.16);
-  --shadow-text: 0 2px 4px rgba(0, 0, 0, 0.5);
+  /* Shadow Tokens（随主题变化的部分见下方"主题令牌"块） */
   --shadow-text-light: 0 1px 3px rgba(0, 0, 0, 0.3);
 
   /* Backdrop Blur Tokens */
@@ -90,8 +84,29 @@
   --blur-md: 14px;
   --blur-lg: 18px;
   --blur-xl: 24px;
+}
 
-  /* Color Tokens - Auto Mode (follows system preference, defaults to dark) */
+/* ------------------------------------------
+   主题令牌（深色为默认值）
+   同一份值同时挂到三个选择器，使"首绘防闪类"与"运行期解析类"优先级完全一致：
+     :root                → 全局默认 / 无脚本兜底
+     html.theme-dark body → theme-init.js 首帧前挂载的防闪类
+     body.dark-bg         → applyColorMode 运行期挂载
+   早期版本只有 html.theme-light 有对应规则，html.theme-dark 仅能依赖 :root 默认值，
+   会被系统浅色的媒体查询覆盖，导致"系统浅色 + 扩展手动深色"在首绘阶段闪现浅色。
+   ------------------------------------------ */
+:root,
+html.theme-dark body,
+body.dark-bg {
+  /* Shadow Tokens */
+  --shadow-glass: 0 8px 18px rgba(0, 0, 0, 0.12);
+  --shadow-glass-hover: 0 10px 22px rgba(0, 0, 0, 0.16);
+  --shadow-float: 0 8px 20px rgba(0, 0, 0, 0.22);
+  --shadow-dialog: 0 12px 28px rgba(0, 0, 0, 0.18);
+  --shadow-toast: 0 6px 16px rgba(0, 0, 0, 0.16);
+  --shadow-text: 0 2px 4px rgba(0, 0, 0, 0.5);
+
+  /* Color Tokens - Dark */
   /* 墨靛基底：比冷炭灰更深更纯，带极轻蓝紫调，如无污染夜空，去灰而显深邃 */
   --color-bg-base: #0e1018;
   --color-bg-elevated: rgba(30, 30, 40, 0.85);
@@ -141,7 +156,7 @@ html.theme-light body {
   --shadow-toast: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-text: 0 1px 3px rgba(0, 0, 0, 0.3);
 
-  /* 液態玻璃令牌不在淺色模式覆蓋：玻璃組件全局統一為深色模式風格（見 :root），
+  /* 液態玻璃令牌不在淺色模式覆蓋：玻璃組件全局統一為深色模式風格（見"主题令牌"块），
      僅文字與基礎背景隨模式適應，確保自動/亮色/深色三種模式下玻璃表現一致 */
 
   /* Blob Colors - Light：柔和蓝粉紫，避免浅色下过艳 */
@@ -163,9 +178,12 @@ html.has-custom-bg body {
   --shadow-text-light: 0 1px 3px rgba(255, 255, 255, 0.45);
 }
 
-/* System Light Mode - when no custom background and not explicitly set to dark */
+/* System Light Mode - 仅在 html/body 都没有显式解析主题时作为兜底。
+   html:not(.theme-*) 是必须的：theme-init.js 在首帧前只给 <html> 挂防闪类，
+   此时 body 还没有 light-bg/dark-bg。若不加该限定，"系统浅色 + 扩展手动深色"
+   会被本规则覆盖成浅色令牌（首绘闪浅色），而手动浅色又会被系统深色规则反向覆盖。 */
 @media (prefers-color-scheme: light) {
-  body:not(.light-bg):not(.dark-bg):not(.has-custom-bg) {
+  html:not(.theme-light):not(.theme-dark) body:not(.light-bg):not(.dark-bg):not(.has-custom-bg) {
     --color-bg-base: #f4f7fc;
     --color-bg-elevated: rgba(245, 245, 247, 0.9);
     --color-glass-bg: rgba(255, 255, 255, 0.75);
@@ -188,7 +206,7 @@ html.has-custom-bg body {
     --shadow-toast: 0 4px 12px rgba(0, 0, 0, 0.08);
     --shadow-text: 0 1px 3px rgba(0, 0, 0, 0.3);
 
-    /* 液態玻璃令牌不覆蓋：統一使用 :root 深色風格 */
+    /* 液態玻璃令牌不覆蓋：統一使用深色風格（见"主题令牌"块） */
 
     /* Blob Colors - Light：柔和蓝粉紫，避免浅色下过艳 */
     --blob-1: #7aa7ff;
@@ -197,9 +215,10 @@ html.has-custom-bg body {
   }
 }
 
-/* System Dark Mode - default fallback（与 :root 基底保持一致） */
+/* System Dark Mode - 同样只在没有显式解析主题时兜底；
+   补上 :not(.dark-bg) 后与浅色规则对称，避免运行期类与系统偏好互相覆盖 */
 @media (prefers-color-scheme: dark) {
-  body:not(.light-bg):not(.has-custom-bg) {
+  html:not(.theme-light):not(.theme-dark) body:not(.light-bg):not(.dark-bg):not(.has-custom-bg) {
     --color-bg-base: #0e1018;
   }
 }
